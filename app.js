@@ -1,9 +1,16 @@
 import { firebaseConfig } from './firebase-config.js';
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/11.10.0/firebase-app.js';
 import { getAuth, onAuthStateChanged, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut, GoogleAuthProvider, signInWithPopup, updateProfile } from 'https://www.gstatic.com/firebasejs/11.10.0/firebase-auth.js';
-import { getFirestore, collection, doc, addDoc, setDoc, getDoc, updateDoc, deleteDoc, query, where, onSnapshot, serverTimestamp, writeBatch, arrayUnion, arrayRemove, deleteField } from 'https://www.gstatic.com/firebasejs/11.10.0/firebase-firestore.js';
+import { getFirestore, initializeFirestore, persistentLocalCache, persistentMultipleTabManager, collection, doc, addDoc, setDoc, getDoc, updateDoc, deleteDoc, query, where, onSnapshot, serverTimestamp, writeBatch, arrayUnion, arrayRemove, deleteField } from 'https://www.gstatic.com/firebasejs/11.10.0/firebase-firestore.js';
 
-const app = initializeApp(firebaseConfig); const auth = getAuth(app); const db = getFirestore(app);
+const app=initializeApp(firebaseConfig),auth=getAuth(app);
+let db;
+try{
+  db=initializeFirestore(app,{localCache:persistentLocalCache({tabManager:persistentMultipleTabManager()})});
+}catch(e){
+  console.warn('영구 Firestore 캐시를 사용할 수 없어 기본 캐시로 전환합니다.',e);
+  db=getFirestore(app);
+}
 const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)];
 let user=null,currentTrip=null,tripUnsub=null,subUnsubs=[],cache={};
 let placeViewMode='category';
@@ -27,7 +34,41 @@ $('#logoutBtn').onclick=()=>signOut(auth); $('#backBtn').onclick=()=>showHome();
 
 onAuthStateChanged(auth,u=>{user=u;$('#authView').classList.toggle('hidden',!!u);$('#homeView').classList.toggle('hidden',!u);$('#logoutBtn').classList.toggle('hidden',!u);$('#userLabel').textContent=u?(u.displayName||u.email):'';if(u)listenTrips();else cleanup()});
 function cleanup(){if(tripUnsub)tripUnsub();subUnsubs.forEach(f=>f());subUnsubs=[];currentTrip=null}
-function listenTrips(){const q=query(collection(db,'trips'),where('memberIds','array-contains',user.uid));if(tripUnsub)tripUnsub();tripUnsub=onSnapshot(q,s=>{const trips=s.docs.map(d=>({id:d.id,...d.data()}));$('#tripGrid').innerHTML=trips.length?trips.map(t=>`<article class="card trip-card"><div><span class="pill">${esc(t.destination||'여행')}</span></div><h3>${esc(t.name)}</h3><div class="meta">${esc(t.startDate||'')} ~ ${esc(t.endDate||'')} · ${t.memberIds?.length||1}명</div><button class="btn primary" data-open-trip="${t.id}">여행방 열기</button></article>`).join(''):'<div class="empty">아직 여행이 없어요. 새 여행을 만들어보세요.</div>';$$('[data-open-trip]').forEach(b=>b.onclick=()=>openTrip(b.dataset.openTrip));});}
+const tripBackupKey=uid=>`together-trip:last-trips:${firebaseConfig.projectId}:${uid}`;
+function readTripBackup(){
+  try{return JSON.parse(localStorage.getItem(tripBackupKey(user.uid))||'[]')}catch{return[]}
+}
+function writeTripBackup(trips){
+  try{
+    const safe=trips.map(t=>({id:t.id,name:t.name||'여행',destination:t.destination||'',startDate:t.startDate||'',endDate:t.endDate||'',memberIds:Array.isArray(t.memberIds)?t.memberIds:[]}));
+    localStorage.setItem(tripBackupKey(user.uid),JSON.stringify(safe));
+  }catch(e){console.warn('여행 목록 백업 실패',e)}
+}
+function renderTripGrid(trips,status=''){
+  $('#tripGrid').innerHTML=`${status?`<div class="data-status">${esc(status)}</div>`:''}${trips.length?trips.map(t=>`<article class="card trip-card"><div><span class="pill">${esc(t.destination||'여행')}</span></div><h3>${esc(t.name)}</h3><div class="meta">${esc(t.startDate||'')} ~ ${esc(t.endDate||'')} · ${t.memberIds?.length||1}명</div><button class="btn primary" data-open-trip="${t.id}">여행방 열기</button></article>`).join(''):'<div class="empty">아직 여행이 없어요. 새 여행을 만들어보세요.</div>'}`;
+  $$('[data-open-trip]').forEach(b=>b.onclick=()=>openTrip(b.dataset.openTrip));
+}
+function listenTrips(){
+  const q=query(collection(db,'trips'),where('memberIds','array-contains',user.uid));
+  if(tripUnsub)tripUnsub();
+  const backup=readTripBackup();
+  if(backup.length)renderTripGrid(backup,'마지막으로 저장된 여행 목록을 불러왔습니다. Firebase와 동기화 중입니다.');
+  tripUnsub=onSnapshot(q,{includeMetadataChanges:true},snapshot=>{
+    const trips=snapshot.docs.map(d=>({id:d.id,...d.data()}));
+    if(trips.length||!snapshot.metadata.fromCache){
+      writeTripBackup(trips);
+      renderTripGrid(trips,snapshot.metadata.fromCache?'오프라인 캐시의 여행 목록입니다. 연결되면 자동 동기화됩니다.':'');
+    }else if(backup.length){
+      renderTripGrid(backup,'네트워크 또는 권한 확인 중입니다. 기존 여행 기록은 삭제되지 않았습니다.');
+    }else{
+      renderTripGrid([]);
+    }
+  },error=>{
+    console.error('여행 목록 구독 실패',error);
+    const saved=readTripBackup();
+    renderTripGrid(saved,`Firebase에서 여행을 불러오지 못했습니다. 기록은 삭제되지 않았습니다: ${error.message||error}`);
+  });
+}
 
 $('#newTripBtn').onclick=()=>{
   modal(`<h3>새 여행 만들기</h3><div class="field"><label>여행 이름</label><input id="mName" placeholder="2026 도쿄 여행"></div><div class="row"><div class="field"><label>출발일</label><input id="mStart" type="date"></div><div class="field"><label>종료일</label><input id="mEnd" type="date"></div></div><div class="field"><label>대표 여행지</label><input id="mDest" placeholder="Tokyo, Japan"></div><div class="row"><div class="field"><label>기준 통화</label><select id="mBase">${currencyOptions('KRW')}</select></div><div class="field"><label>현지 통화</label><select id="mForeign">${currencyOptions('JPY')}</select></div></div><div class="field"><label>총 여행 예산(기준 통화)</label><input id="mBudget" type="number" value="0"></div><div class="row"><button class="btn" data-close="1">취소</button><button id="createTrip" class="btn primary">만들기</button></div><p id="createTripMsg" class="note"></p>`);
@@ -370,3 +411,5 @@ function bindDeletes(){
   $$('[data-edit]').forEach(b=>b.onclick=()=>{const [sub,id]=b.dataset.edit.split(':');editRecord(sub,id)});
   $$('[data-del]').forEach(b=>b.onclick=async()=>{const [sub,id]=b.dataset.del.split(':');if(confirm('삭제할까요?'))await deleteDoc(doc(db,'trips',currentTrip.id,sub,id))});
 }
+
+window.addEventListener('offline',()=>{if(user){const saved=readTripBackup();if(saved.length)renderTripGrid(saved,'오프라인입니다. 마지막 여행 목록을 표시합니다.')}});
