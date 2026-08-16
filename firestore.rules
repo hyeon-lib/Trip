@@ -27,7 +27,8 @@ service cloud.firestore {
         && request.resource.data.memberIds.size() == resource.data.memberIds.size() + 1
         && request.resource.data.ownerId == resource.data.ownerId
         && request.resource.data.inviteCode == resource.data.inviteCode
-        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['memberIds', 'members'])
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['memberIds', 'members', 'updatedAt', 'updatedBy'])
+        && (!('bannedMemberIds' in resource.data) || !(request.auth.uid in resource.data.bannedMemberIds))
         && resource.data.inviteCode != null
         && exists(/databases/$(database)/documents/invites/$(resource.data.inviteCode))
         && get(/databases/$(database)/documents/invites/$(resource.data.inviteCode)).data.tripId == tripId;
@@ -62,9 +63,9 @@ service cloud.firestore {
       allow list: if false;
       allow create: if signedIn()
         && request.resource.data.ownerId == request.auth.uid
-        && get(/databases/$(database)/documents/trips/$(request.resource.data.tripId)).data.ownerId == request.auth.uid;
-      allow update, delete: if signedIn()
-        && resource.data.ownerId == request.auth.uid;
+        && getAfter(/databases/$(database)/documents/trips/$(request.resource.data.tripId)).data.ownerId == request.auth.uid
+        && getAfter(/databases/$(database)/documents/trips/$(request.resource.data.tripId)).data.inviteCode == code;
+      allow update, delete: if false;
     }
 
     match /trips/{tripId} {
