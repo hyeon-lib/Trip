@@ -72,7 +72,7 @@ service cloud.firestore {
       allow create: if signedIn()
         && request.resource.data.ownerId == request.auth.uid
         && request.auth.uid in request.resource.data.memberIds;
-      allow read: if isMember(tripId);
+      allow read: if isMember(tripId) || (signedIn() && resource.data.ownerId == request.auth.uid);
       allow update: if (isOwner(tripId))
         || (isMember(tripId) && memberSafeUpdate())
         || validJoin(tripId)
