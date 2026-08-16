@@ -46,3 +46,6 @@
 .place-photo{width:96px;height:72px;object-fit:cover;border-radius:10px;flex:0 0 auto}
 .place-info{min-width:0;flex:1}
 @media(max-width:560px){.google-result{grid-template-columns:82px minmax(0,1fr)}.google-result img{width:82px;height:72px}.place-item{align-items:flex-start}.place-photo{width:72px;height:64px}}
+
+.trip-trash{grid-column:1/-1;margin-top:18px;padding-top:8px;border-top:1px solid var(--line,#e5e7eb)}
+.trip-card.trashed{opacity:.82}
