@@ -340,7 +340,7 @@ async function googlePlaceSearchForm(){
       const places=response.places||[];
       if(!places.length){message.textContent='검색 결과가 없습니다.';return}
       message.textContent=`${places.length}개의 장소를 찾았습니다.`;
-      results.innerHTML=places.map((p,i)=>{const photo=p.photos?.[0]?.getURI?.({maxWidth:320,maxHeight:180});return `<button class="google-result" data-google-result="${i}">${photo?`<img src="${esc(photo)}" alt="">`:''}<span><b>${esc(p.displayName||'이름 없음')}</b><small>${esc(p.formattedAddress||'')}</small><small>${p.rating?`평점 ${p.rating} · `:''}${esc(p.primaryTypeDisplayName||'')}</small></span></button>`}).join('');
+      results.innerHTML=places.map((p,i)=>{const photo=p.photos?.[0]?.getURI?.({maxWidth:320,maxHeight:180}),mapUrl=p.googleMapsURI||`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(p.displayName||'')}`;return `<div class="google-result-card">${photo?`<img src="${esc(photo)}" alt="">`:''}<span><b>${esc(p.displayName||'이름 없음')}</b><small>${esc(p.formattedAddress||'')}</small><small>${p.rating?`평점 ${p.rating} · `:''}${esc(p.primaryTypeDisplayName||'')}</small><div class="actions"><a class="btn small" href="${esc(mapUrl)}" target="_blank" rel="noopener">지도에서 상세 보기</a><button class="btn small primary" data-google-result="${i}">추천 장소에 저장</button></div></span></div>`}).join('');
       $$('[data-google-result]').forEach(b=>b.onclick=async()=>{
         const p=places[Number(b.dataset.googleResult)],location=p.location,photo=p.photos?.[0]?.getURI?.({maxWidth:640,maxHeight:480})||'';
         b.disabled=true;
@@ -352,7 +352,7 @@ async function googlePlaceSearchForm(){
 }
 function placeCard(p){
   const safeUrl=/^https:\/\/(www\.)?google\.com\/maps|^https:\/\/maps\.app\.goo\.gl\//i.test(p.mapsUrl||'')?p.mapsUrl:`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent((p.name||'')+' '+(currentTrip.destination||''))}`;
-  return `<div class="item place-item">${p.photoUrl?`<img class="place-photo" src="${esc(p.photoUrl)}" alt="">`:''}<div class="place-info"><h4>${esc(p.name)}</h4><div class="sub">${esc(p.category||'기타')} ${p.rating?`· 평점 ${fmt(p.rating)}`:''} ${p.note?'· '+esc(p.note):''}</div>${p.address?`<div class="sub">${esc(p.address)}</div>`:''}${p.lat!=null?`<div class="sub">위치 ${Number(p.lat).toFixed(4)}, ${Number(p.lng).toFixed(4)}</div>`:''}</div><div class="actions"><a class="btn small" target="_blank" rel="noopener" href="${esc(safeUrl)}">Google Maps</a><button class="btn small" data-to-it="${esc(p.name)}">일정에 추가</button><button class="btn small" data-edit="places:${p.id}">수정</button><button class="btn small" data-del="places:${p.id}">삭제</button></div></div>`;
+  return `<div class="item place-item">${p.photoUrl?`<img class="place-photo" src="${esc(p.photoUrl)}" alt="">`:''}<div class="place-info"><h4>${esc(p.name)}</h4><div class="sub">${esc(p.category||'기타')} ${p.rating?`· 평점 ${fmt(p.rating)}`:''} ${p.note?'· '+esc(p.note):''}</div>${p.address?`<div class="sub">${esc(p.address)}</div>`:''}${p.lat!=null?`<div class="sub">위치 ${Number(p.lat).toFixed(4)}, ${Number(p.lng).toFixed(4)}</div>`:''}</div><div class="actions"><a class="btn small" target="_blank" rel="noopener" href="${esc(safeUrl)}">지도에서 상세 보기</a><button class="btn small" data-to-it="${esc(p.name)}">일정에 추가</button><button class="btn small" data-edit="places:${p.id}">수정</button><button class="btn small" data-del="places:${p.id}">삭제</button></div></div>`;
 }
 function renderPlaces(){
   if(!currentTrip)return;
