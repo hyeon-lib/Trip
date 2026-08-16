@@ -1,96 +1,716 @@
-import { firebaseConfig } from './firebase-config.js';
-import { initializeApp } from 'https://www.gstatic.com/firebasejs/11.10.0/firebase-app.js';
-import { getAuth, onAuthStateChanged, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut, GoogleAuthProvider, signInWithPopup, updateProfile } from 'https://www.gstatic.com/firebasejs/11.10.0/firebase-auth.js';
-import { getFirestore, collection, doc, addDoc, setDoc, getDoc, updateDoc, deleteDoc, query, where, onSnapshot, serverTimestamp, writeBatch, arrayUnion } from 'https://www.gstatic.com/firebasejs/11.10.0/firebase-firestore.js';
+import React, { useEffect, useState } from "react";
+import {
+  createUserWithEmailAndPassword,
+  signInWithEmailAndPassword,
+  signOut,
+  onAuthStateChanged,
+} from "firebase/auth";
 
-const app = initializeApp(firebaseConfig); const auth = getAuth(app); const db = getFirestore(app);
-const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)];
-let user=null,currentTrip=null,tripUnsub=null,subUnsubs=[],cache={};
-const tabs=[['overview','홈'],['itinerary','일정'],['places','추천 장소'],['weather','날씨'],['flights','항공'],['stays','숙소'],['money','지출·정산'],['exchange','환전'],['packing','준비물'],['memos','메모'],['members','동행자']];
-const curNames={KRW:'₩',JPY:'¥',USD:'$',EUR:'€',GBP:'£',CNY:'¥',TWD:'NT$',THB:'฿',VND:'₫',SGD:'S$',AUD:'A$',CHF:'CHF'};
-const esc=s=>String(s??'').replace(/[&<>'"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));
-const fmt=n=>Number(n||0).toLocaleString('ko-KR',{maximumFractionDigits:2}); const money=(n,c='KRW')=>`${curNames[c]||c} ${fmt(n)}`;
-const code=()=>Math.random().toString(36).slice(2,8).toUpperCase();
-const modal=(html)=>{$('#modalBody').innerHTML=html;$('#modal').classList.remove('hidden')}; const closeModal=()=>$('#modal').classList.add('hidden');
-$('#modal').addEventListener('click',e=>{if(e.target.id==='modal'||e.target.dataset.close)closeModal()});
+import {
+  collection,
+  addDoc,
+  doc,
+  getDoc,
+  getDocs,
+  query,
+  where,
+  updateDoc,
+  arrayUnion,
+  serverTimestamp,
+} from "firebase/firestore";
 
-function authError(e){$('#authMsg').textContent=e.message?.replace('Firebase:','')||String(e)}
-$('#signupBtn').onclick=async()=>{try{const email=$('#email').value.trim(),pw=$('#password').value,nick=$('#nickname').value.trim()||email.split('@')[0];const cred=await createUserWithEmailAndPassword(auth,email,pw);await updateProfile(cred.user,{displayName:nick});await setDoc(doc(db,'users',cred.user.uid),{nickname:nick,email,createdAt:serverTimestamp()});}catch(e){authError(e)}};
-$('#loginBtn').onclick=async()=>{try{await signInWithEmailAndPassword(auth,$('#email').value.trim(),$('#password').value)}catch(e){authError(e)}};
-$('#googleBtn').onclick=async()=>{try{const cred=await signInWithPopup(auth,new GoogleAuthProvider());await setDoc(doc(db,'users',cred.user.uid),{nickname:cred.user.displayName||cred.user.email,email:cred.user.email,updatedAt:serverTimestamp()},{merge:true})}catch(e){authError(e)}};
-$('#logoutBtn').onclick=()=>signOut(auth); $('#backBtn').onclick=()=>showHome();
+import { auth, db } from "./firebase";
 
-onAuthStateChanged(auth,u=>{user=u;$('#authView').classList.toggle('hidden',!!u);$('#homeView').classList.toggle('hidden',!u);$('#logoutBtn').classList.toggle('hidden',!u);$('#userLabel').textContent=u?(u.displayName||u.email):'';if(u)listenTrips();else cleanup()});
-function cleanup(){if(tripUnsub)tripUnsub();subUnsubs.forEach(f=>f());subUnsubs=[];currentTrip=null}
-function listenTrips(){const q=query(collection(db,'trips'),where('memberIds','array-contains',user.uid));if(tripUnsub)tripUnsub();tripUnsub=onSnapshot(q,s=>{const trips=s.docs.map(d=>({id:d.id,...d.data()}));$('#tripGrid').innerHTML=trips.length?trips.map(t=>`<article class="card trip-card"><div><span class="pill">${esc(t.destination||'여행')}</span></div><h3>${esc(t.name)}</h3><div class="meta">${esc(t.startDate||'')} ~ ${esc(t.endDate||'')} · ${t.memberIds?.length||1}명</div><button class="btn primary" data-open-trip="${t.id}">여행방 열기</button></article>`).join(''):'<div class="empty">아직 여행이 없어요. 새 여행을 만들어보세요.</div>';$$('[data-open-trip]').forEach(b=>b.onclick=()=>openTrip(b.dataset.openTrip));});}
+function App() {
+  const [user, setUser] = useState(null);
+  const [loading, setLoading] = useState(true);
 
-$('#newTripBtn').onclick=()=>modal(`<h3>새 여행 만들기</h3><div class="field"><label>여행 이름</label><input id="mName" placeholder="2026 도쿄 여행"></div><div class="row"><div class="field"><label>출발일</label><input id="mStart" type="date"></div><div class="field"><label>종료일</label><input id="mEnd" type="date"></div></div><div class="field"><label>대표 여행지</label><input id="mDest" placeholder="Tokyo, Japan"></div><div class="row"><div class="field"><label>기준 통화</label><select id="mBase"><option>KRW</option><option>USD</option><option>EUR</option></select></div><div class="field"><label>현지 통화</label><select id="mForeign"><option>JPY</option><option>USD</option><option>EUR</option><option>TWD</option><option>THB</option><option>VND</option><option>GBP</option><option>CNY</option><option>SGD</option><option>AUD</option><option>CHF</option></select></div></div><div class="field"><label>총 여행 예산(기준 통화)</label><input id="mBudget" type="number" value="0"></div><div class="row"><button class="btn" data-close="1">취소</button><button id="createTrip" class="btn primary">만들기</button></div>`);setTimeout(()=>$('#createTrip').onclick=createTrip,0)};
-async function createTrip(){const nick=user.displayName||user.email;const ref=doc(collection(db,'trips'));const data={name:$('#mName').value.trim()||'새 여행',startDate:$('#mStart').value,endDate:$('#mEnd').value,destination:$('#mDest').value.trim(),baseCurrency:$('#mBase').value,foreignCurrencies:[$('#mForeign').value],budget:Number($('#mBudget').value||0),ownerId:user.uid,memberIds:[user.uid],members:{[user.uid]:{nickname:nick,email:user.email,role:'owner'}},inviteCode:null,createdAt:serverTimestamp()};await setDoc(ref,data);closeModal();openTrip(ref.id)}
+  // 로그인 / 회원가입
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [authMode, setAuthMode] = useState("login");
+  const [message, setMessage] = useState("");
 
-$('#joinTripBtn').onclick=()=>modal(`<h3>초대코드로 참가</h3><div class="field"><label>6자리 초대코드</label><input id="joinCode" maxlength="6" style="text-transform:uppercase"></div><div class="row"><button class="btn" data-close="1">취소</button><button id="joinGo" class="btn primary">참가하기</button></div><p id="joinMsg" class="note"></p>`);document.addEventListener('click',e=>{if(e.target.id==='joinGo')joinTrip()});
-async function joinTrip(){try{const c=$('#joinCode').value.trim().toUpperCase();const inv=await getDoc(doc(db,'invites',c));if(!inv.exists())throw new Error('초대코드를 찾을 수 없습니다.');const tr=doc(db,'trips',inv.data().tripId);await updateDoc(tr,{memberIds:arrayUnion(user.uid),[`members.${user.uid}`]:{nickname:user.displayName||user.email,email:user.email,role:'member'}});closeModal();openTrip(inv.data().tripId)}catch(e){$('#joinMsg').textContent=e.message}}
+  // 여행
+  const [tripName, setTripName] = useState("");
+  const [inviteCode, setInviteCode] = useState("");
+  const [trips, setTrips] = useState([]);
 
-async function openTrip(id){cleanupSub();const snap=await getDoc(doc(db,'trips',id));if(!snap.exists())return;currentTrip={id,...snap.data()};$('#homeView').classList.add('hidden');$('#tripView').classList.remove('hidden');renderHeader();renderTabs();listenTripDoc();listenSubs()}
-function showHome(){cleanupSub();$('#tripView').classList.add('hidden');$('#homeView').classList.remove('hidden');currentTrip=null}
-function cleanupSub(){subUnsubs.forEach(f=>f());subUnsubs=[]}
-function listenTripDoc(){subUnsubs.push(onSnapshot(doc(db,'trips',currentTrip.id),s=>{if(s.exists()){currentTrip={id:s.id,...s.data()};renderHeader();renderAll()}}))}
-function listenSubs(){['itinerary','flights','stays','expenses','exchanges','packing','memos','places'].forEach(name=>{subUnsubs.push(onSnapshot(collection(db,'trips',currentTrip.id,name),s=>{cache[name]=s.docs.map(d=>({id:d.id,...d.data()}));renderAll()}))})}
-function renderHeader(){const owner=currentTrip.ownerId===user.uid;$('#tripTitle').textContent=currentTrip.name;$('#tripMeta').textContent=`${currentTrip.startDate||''} ~ ${currentTrip.endDate||''} · ${currentTrip.destination||''}`;$('#inviteCode').textContent=owner?(currentTrip.inviteCode?`초대 ${currentTrip.inviteCode}`:'초대코드 미발급'):'';$('#inviteCode').classList.toggle('hidden',!owner);$('#copyInviteBtn').classList.toggle('hidden',!owner||!currentTrip.inviteCode)}
-$('#copyInviteBtn').onclick=async()=>{if(currentTrip?.inviteCode){await navigator.clipboard.writeText(currentTrip.inviteCode);alert('초대코드를 복사했습니다.')}};
-function renderTabs(){$('#tabs').innerHTML=tabs.map(([k,l],i)=>`<button class="tab ${i===0?'active':''}" data-tab="${k}">${l}</button>`).join('');$$('[data-tab]').forEach(b=>b.onclick=()=>{$$('.tab').forEach(x=>x.classList.toggle('active',x===b));$$('.panel').forEach(p=>p.classList.toggle('active',p.id===`panel-${b.dataset.tab}`));if(b.dataset.tab==='weather')loadWeather();if(b.dataset.tab==='places')renderPlaces()})}
-function renderAll(){if(!currentTrip)return;renderOverview();renderItinerary();renderFlights();renderStays();renderMoney();renderExchange();renderPacking();renderMemos();renderMembers();renderPlaces()}
-function memberOptions(sel=''){return Object.entries(currentTrip.members||{}).map(([uid,m])=>`<option value="${uid}" ${uid===sel?'selected':''}>${esc(m.nickname||m.email)}</option>`).join('')}
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
+      setUser(currentUser);
 
-function renderOverview(){const ex=cache.expenses||[], shared=ex.filter(x=>x.type==='shared').reduce((a,b)=>a+Number(b.baseAmount||0),0),personal=ex.filter(x=>x.type==='personal').reduce((a,b)=>a+Number(b.baseAmount||0),0),budget=Number(currentTrip.budget||0);$('#panel-overview').innerHTML=`<div class="kpis"><div class="kpi"><div class="l">총 예산</div><div class="n">${money(budget,currentTrip.baseCurrency)}</div></div><div class="kpi"><div class="l">공동 지출</div><div class="n">${money(shared,currentTrip.baseCurrency)}</div></div><div class="kpi"><div class="l">개인 지출</div><div class="n">${money(personal,currentTrip.baseCurrency)}</div></div><div class="kpi"><div class="l">남은 예산</div><div class="n ${budget-shared-personal<0?'danger':'good'}">${money(budget-shared-personal,currentTrip.baseCurrency)}</div></div></div><div class="section-title"><h2>여행 한눈에 보기</h2></div><div class="grid"><div class="card"><b>일정</b><p class="big">${(cache.itinerary||[]).length}개</p><span class="muted">등록된 코스</span></div><div class="card"><b>숙소</b><p class="big">${(cache.stays||[]).length}곳</p><span class="muted">예약/예정</span></div><div class="card"><b>동행자</b><p class="big">${currentTrip.memberIds?.length||1}명</p><span class="muted">같이 편집 중</span></div></div>`}
+      if (currentUser) {
+        await loadTrips(currentUser.uid);
+      } else {
+        setTrips([]);
+      }
 
-function days(){if(!currentTrip.startDate||!currentTrip.endDate)return[];let d=new Date(currentTrip.startDate+'T00:00:00'),e=new Date(currentTrip.endDate+'T00:00:00'),out=[];while(d<=e&&out.length<40){out.push(d.toISOString().slice(0,10));d.setDate(d.getDate()+1)}return out}
-function renderItinerary(){const list=cache.itinerary||[];$('#panel-itinerary').innerHTML=`<div class="section-title"><h2>일자별 여행 코스</h2><button id="addIt" class="btn primary">+ 일정 추가</button></div>${days().map((d,i)=>{const its=list.filter(x=>x.date===d).sort((a,b)=>(a.time||'').localeCompare(b.time||''));return `<div class="day"><h3>DAY ${i+1} · ${d}</h3><div class="timeline">${its.length?its.map(x=>`<div class="slot"><b>${esc(x.time||'--:--')}</b><div><b>${esc(x.title)}</b><div class="sub">${esc(x.place||'')} ${x.note?'· '+esc(x.note):''}</div></div><button class="btn small" data-del="itinerary:${x.id}">삭제</button></div>`).join(''):'<div class="empty">아직 일정이 없습니다.</div>'}</div></div>`}).join('')}`;$('#addIt').onclick=()=>formIt();bindDeletes()}
-function formIt(place=''){modal(`<h3>일정 추가</h3><div class="row"><div class="field"><label>날짜</label><select id="fDate">${days().map(d=>`<option>${d}</option>`).join('')}</select></div><div class="field"><label>시간</label><input id="fTime" type="time"></div></div><div class="field"><label>일정명</label><input id="fTitle" placeholder="아사쿠사 산책"></div><div class="field"><label>장소</label><input id="fPlace" value="${esc(place)}"></div><div class="field"><label>메모</label><textarea id="fNote"></textarea></div><div class="row"><button class="btn" data-close="1">취소</button><button id="saveIt" class="btn primary">저장</button></div>`);setTimeout(()=>$('#saveIt').onclick=async()=>{await addDoc(collection(db,'trips',currentTrip.id,'itinerary'),{date:$('#fDate').value,time:$('#fTime').value,title:$('#fTitle').value.trim(),place:$('#fPlace').value.trim(),note:$('#fNote').value.trim(),createdBy:user.uid,createdAt:serverTimestamp()});closeModal()},0)}
+      setLoading(false);
+    });
 
-function renderPlaces(){if(!currentTrip)return;const saved=cache.places||[];$('#panel-places').innerHTML=`<div class="section-title"><h2>추천 장소</h2></div><div class="card"><div class="field"><label>여행지에서 찾기</label><div class="row"><input id="placeQ" placeholder="예: 도쿄 야경, 오사카 라멘"><button id="searchPlace" class="btn primary">검색</button></div></div><p class="note">Google Maps 검색으로 연결하고, 마음에 드는 장소는 아래에 저장해 공동 후보로 관리할 수 있습니다.</p><div id="placeSearchResult"></div></div><div class="section-title"><h2>우리의 후보 장소</h2><button id="addPlaceManual" class="btn">+ 직접 저장</button></div><div class="list">${saved.length?saved.map(p=>`<div class="item"><div><h4>${esc(p.name)}</h4><div class="sub">${esc(p.category||'')} ${p.note?'· '+esc(p.note):''}</div></div><div class="actions"><button class="btn small" data-to-it="${esc(p.name)}">일정에 추가</button><button class="btn small" data-del="places:${p.id}">삭제</button></div></div>`).join(''):'<div class="empty">동행자와 가고 싶은 장소를 저장해보세요.</div>'}</div>`;$('#searchPlace').onclick=()=>{const q=$('#placeQ').value.trim();if(!q)return;const url=`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(q+' '+(currentTrip.destination||''))}`;$('#placeSearchResult').innerHTML=`<p><a class="btn" target="_blank" rel="noopener" href="${url}">Google Maps에서 “${esc(q)}” 검색 열기 ↗</a></p>`};$('#addPlaceManual').onclick=()=>placeForm();$$('[data-to-it]').forEach(b=>b.onclick=()=>formIt(b.dataset.toIt));bindDeletes()}
-function placeForm(){modal(`<h3>추천 장소 저장</h3><div class="field"><label>장소명</label><input id="pName"></div><div class="field"><label>분류</label><select id="pCat"><option>관광</option><option>맛집</option><option>카페</option><option>쇼핑</option><option>야경</option><option>기타</option></select></div><div class="field"><label>메모</label><textarea id="pNote"></textarea></div><div class="row"><button class="btn" data-close="1">취소</button><button id="pSave" class="btn primary">저장</button></div>`);setTimeout(()=>$('#pSave').onclick=async()=>{await addDoc(collection(db,'trips',currentTrip.id,'places'),{name:$('#pName').value.trim(),category:$('#pCat').value,note:$('#pNote').value.trim(),createdBy:user.uid,createdAt:serverTimestamp()});closeModal()},0)}
+    return () => unsubscribe();
+  }, []);
 
-async function loadWeather(){const box=$('#panel-weather');box.innerHTML='<div class="section-title"><h2>실제 날씨</h2></div><div class="card">날씨를 불러오는 중…</div>';try{const city=currentTrip.destination;if(!city)throw Error('여행 대표 여행지를 먼저 입력하세요.');const g=await fetch(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(city)}&count=1&language=ko&format=json`).then(r=>r.json());const loc=g.results?.[0];if(!loc)throw Error('여행지 좌표를 찾지 못했습니다.');const w=await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${loc.latitude}&longitude=${loc.longitude}&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max&timezone=auto&forecast_days=10`).then(r=>r.json());box.innerHTML=`<div class="section-title"><h2>실제 날씨</h2><span class="pill">${esc(loc.name)}, ${esc(loc.country||'')}</span></div><p class="note">예보 가능 범위의 실제 데이터입니다. 여행일이 멀면 출발 전에 다시 확인하세요.</p><div class="weather-grid">${w.daily.time.map((d,i)=>`<div class="weather-card"><b>${d}</b><div class="big">${Math.round(w.daily.temperature_2m_max[i])}°</div><div>${Math.round(w.daily.temperature_2m_min[i])}° ~ ${Math.round(w.daily.temperature_2m_max[i])}°</div><div class="muted">강수 ${w.daily.precipitation_probability_max[i]??'-'}%</div></div>`).join('')}</div>`}catch(e){box.innerHTML=`<div class="section-title"><h2>실제 날씨</h2></div><div class="card danger">${esc(e.message)}</div>`}}
+  // 랜덤 초대 코드 만들기
+  const makeInviteCode = () => {
+    const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+    let result = "";
 
-function renderFlights(){const a=cache.flights||[];$('#panel-flights').innerHTML=`<div class="section-title"><h2>항공편</h2><button id="addFlight" class="btn primary">+ 항공 추가</button></div><div class="list">${a.length?a.map(x=>`<div class="item"><div><h4>${esc(x.airline||'')} ${esc(x.flightNo||'')}</h4><div class="sub">${esc(x.date||'')} · ${esc(x.from||'')} ${esc(x.depart||'')} → ${esc(x.to||'')} ${esc(x.arrive||'')}</div><div class="sub">예약번호 ${esc(x.booking||'-')}</div></div><button class="btn small" data-del="flights:${x.id}">삭제</button></div>`).join(''):'<div class="empty">항공권 정보를 한곳에 모아두세요.</div>'}</div>`;$('#addFlight').onclick=flightForm;bindDeletes()}
-function flightForm(){modal(`<h3>항공편 추가</h3><div class="row"><div class="field"><label>항공사</label><input id="flAir"></div><div class="field"><label>편명</label><input id="flNo"></div></div><div class="field"><label>날짜</label><input id="flDate" type="date"></div><div class="row"><div class="field"><label>출발지</label><input id="flFrom"></div><div class="field"><label>출발시간</label><input id="flDepart" type="time"></div></div><div class="row"><div class="field"><label>도착지</label><input id="flTo"></div><div class="field"><label>도착시간</label><input id="flArrive" type="time"></div></div><div class="field"><label>예약번호</label><input id="flBook"></div><div class="row"><button class="btn" data-close="1">취소</button><button id="flSave" class="btn primary">저장</button></div>`);setTimeout(()=>$('#flSave').onclick=async()=>{await addDoc(collection(db,'trips',currentTrip.id,'flights'),{airline:$('#flAir').value,flightNo:$('#flNo').value,date:$('#flDate').value,from:$('#flFrom').value,to:$('#flTo').value,depart:$('#flDepart').value,arrive:$('#flArrive').value,booking:$('#flBook').value,createdAt:serverTimestamp()});closeModal()},0)}
+    for (let i = 0; i < 6; i++) {
+      result += chars.charAt(Math.floor(Math.random() * chars.length));
+    }
 
-function renderStays(){const a=cache.stays||[];$('#panel-stays').innerHTML=`<div class="section-title"><h2>숙소</h2><button id="addStay" class="btn primary">+ 숙소 추가</button></div><div class="list">${a.length?a.map(x=>`<div class="item"><div><h4>${esc(x.name)}</h4><div class="sub">${esc(x.checkin||'')} → ${esc(x.checkout||'')} · ${esc(x.address||'')}</div><div class="sub">예약번호 ${esc(x.booking||'-')}</div></div><button class="btn small" data-del="stays:${x.id}">삭제</button></div>`).join(''):'<div class="empty">숙소 예약 정보를 저장하세요.</div>'}</div>`;$('#addStay').onclick=stayForm;bindDeletes()}
-function stayForm(){modal(`<h3>숙소 추가</h3><div class="field"><label>숙소명</label><input id="stName"></div><div class="row"><div class="field"><label>체크인</label><input id="stIn" type="date"></div><div class="field"><label>체크아웃</label><input id="stOut" type="date"></div></div><div class="field"><label>주소</label><input id="stAddr"></div><div class="field"><label>예약번호</label><input id="stBook"></div><div class="row"><button class="btn" data-close="1">취소</button><button id="stSave" class="btn primary">저장</button></div>`);setTimeout(()=>$('#stSave').onclick=async()=>{await addDoc(collection(db,'trips',currentTrip.id,'stays'),{name:$('#stName').value,checkin:$('#stIn').value,checkout:$('#stOut').value,address:$('#stAddr').value,booking:$('#stBook').value,createdAt:serverTimestamp()});closeModal()},0)}
+    return result;
+  };
 
-function settlements(){const ms=Object.keys(currentTrip.members||{}), bal=Object.fromEntries(ms.map(x=>[x,0]));for(const e of cache.expenses||[]){const amt=Number(e.baseAmount||0),payer=e.payerUid;if(!bal.hasOwnProperty(payer))continue;if(e.type==='shared'){const participants=e.participantUids?.length?e.participantUids:ms;const share=amt/participants.length;bal[payer]+=amt;participants.forEach(u=>{if(bal.hasOwnProperty(u))bal[u]-=share})}else{const owner=e.personalUid||payer;bal[payer]+=amt;if(bal.hasOwnProperty(owner))bal[owner]-=amt}}const debt=Object.entries(bal).filter(([,v])=>v<-.01).map(([u,v])=>[u,-v]),cred=Object.entries(bal).filter(([,v])=>v>.01).map(([u,v])=>[u,v]),out=[];let i=0,j=0;while(i<debt.length&&j<cred.length){const a=Math.min(debt[i][1],cred[j][1]);out.push({from:debt[i][0],to:cred[j][0],amount:a});debt[i][1]-=a;cred[j][1]-=a;if(debt[i][1]<.01)i++;if(cred[j][1]<.01)j++}return out}
-function renderMoney(){const a=cache.expenses||[],sett=settlements();$('#panel-money').innerHTML=`<div class="section-title"><h2>예산·지출 관리</h2><button id="addExpense" class="btn primary">+ 지출 추가</button></div><div class="list">${a.length?a.map(e=>`<div class="item"><div><h4>${esc(e.title)}</h4><div class="sub">${e.type==='shared'?'공동비용':'개인비용'} · 결제 ${esc(currentTrip.members?.[e.payerUid]?.nickname||'')}</div><div class="sub">${money(e.originalAmount,e.currency)} → ${money(e.baseAmount,currentTrip.baseCurrency)} ${e.fxRate?`· 적용환율 ${fmt(e.fxRate)}`:''}</div></div><div class="right"><div class="money">${money(e.baseAmount,currentTrip.baseCurrency)}</div><button class="btn small" data-del="expenses:${e.id}">삭제</button></div></div>`).join(''):'<div class="empty">공동비와 개인비를 기록하면 자동 정산됩니다.</div>'}</div><div class="section-title"><h2>최종 정산</h2></div><div class="card">${sett.length?sett.map(s=>`<div class="item"><b>${esc(currentTrip.members[s.from]?.nickname)} → ${esc(currentTrip.members[s.to]?.nickname)}</b><span class="money">${money(s.amount,currentTrip.baseCurrency)}</span></div>`).join(''):'현재 서로 보낼 돈이 없습니다.'}</div>`;$('#addExpense').onclick=expenseForm;bindDeletes()}
-async function fxToBase(currency,amount){if(currency===currentTrip.baseCurrency)return {rate:1,base:Number(amount)};const data=await fetch(`https://api.frankfurter.app/latest?from=${encodeURIComponent(currency)}&to=${encodeURIComponent(currentTrip.baseCurrency)}`).then(r=>{if(!r.ok)throw Error('환율 API 오류');return r.json()});const rate=data.rates?.[currentTrip.baseCurrency];if(!rate)throw Error('환율을 가져오지 못했습니다.');return {rate,base:Number(amount)*rate}}
-function expenseForm(){const foreign=currentTrip.foreignCurrencies?.[0]||'JPY';modal(`<h3>지출 추가</h3><div class="field"><label>내용</label><input id="exTitle" placeholder="저녁 식사"></div><div class="row"><div class="field"><label>금액</label><input id="exAmt" type="number"></div><div class="field"><label>통화</label><select id="exCur"><option>${foreign}</option><option>${currentTrip.baseCurrency}</option><option>USD</option><option>EUR</option></select></div></div><div class="row"><div class="field"><label>비용 유형</label><select id="exType"><option value="shared">공동비용</option><option value="personal">개인비용</option></select></div><div class="field"><label>실제 결제자</label><select id="exPayer">${memberOptions(user.uid)}</select></div></div><div id="personalWrap" class="field hidden"><label>개인비용 사용자</label><select id="exPersonal">${memberOptions()}</select></div><div class="field"><label>결제수단</label><select id="exMethod"><option>공동 현금</option><option>개인 현금</option><option>개인 카드</option><option>공동 카드</option></select></div><p class="note">외화 금액은 저장 시점의 실제 환율을 자동 적용합니다. 환전 평균가를 쓰고 싶다면 환전 탭의 평균 환율을 참고해 기준통화 금액을 직접 입력할 수도 있습니다.</p><div class="row"><button class="btn" data-close="1">취소</button><button id="exSave" class="btn primary">저장</button></div><p id="exMsg" class="note"></p>`);setTimeout(()=>{$('#exType').onchange=()=>$('#personalWrap').classList.toggle('hidden',$('#exType').value!=='personal');$('#exSave').onclick=async()=>{try{const amount=Number($('#exAmt').value),cur=$('#exCur').value,res=await fxToBase(cur,amount);await addDoc(collection(db,'trips',currentTrip.id,'expenses'),{title:$('#exTitle').value.trim(),originalAmount:amount,currency:cur,baseAmount:res.base,fxRate:res.rate,type:$('#exType').value,payerUid:$('#exPayer').value,personalUid:$('#exType').value==='personal'?$('#exPersonal').value:null,participantUids:Object.keys(currentTrip.members||{}),method:$('#exMethod').value,createdAt:serverTimestamp()});closeModal()}catch(e){$('#exMsg').textContent=e.message}}},0)}
+  // 내가 들어가 있는 여행 불러오기
+  const loadTrips = async (uid) => {
+    try {
+      const tripsRef = collection(db, "trips");
 
-async function currentForeignRate(foreign){const d=await fetch(`https://api.frankfurter.app/latest?from=${encodeURIComponent(foreign)}&to=${encodeURIComponent(currentTrip.baseCurrency)}`).then(r=>r.json());return d.rates?.[currentTrip.baseCurrency]}
-function exchangeStats(){const a=cache.exchanges||[],base=a.reduce((s,x)=>s+Number(x.baseSpent||0),0),foreign=a.reduce((s,x)=>s+Number(x.foreignReceived||0),0);return {base,foreign,avg:foreign?base/foreign:0}}
-async function renderExchange(){const a=cache.exchanges||[],s=exchangeStats(),foreign=currentTrip.foreignCurrencies?.[0]||'JPY',plan=Number(currentTrip.exchangePlan||0);let now='-';try{const r=await currentForeignRate(foreign);if(r)now=foreign==='JPY'?`${fmt(r*100)} ${currentTrip.baseCurrency}/100 JPY`:`${fmt(r)} ${currentTrip.baseCurrency}/${foreign}`}catch{}$('#panel-exchange').innerHTML=`<div class="section-title"><h2>환율·분할 환전</h2><button id="addExchange" class="btn primary">+ 환전 기록</button></div><div class="kpis"><div class="kpi"><div class="l">현재 환율</div><div class="n" style="font-size:18px">${now}</div></div><div class="kpi"><div class="l">환전 계획</div><div class="n">${money(plan,currentTrip.baseCurrency)}</div></div><div class="kpi"><div class="l">환전 완료</div><div class="n">${money(s.base,currentTrip.baseCurrency)}</div></div><div class="kpi"><div class="l">내 평균 환전가</div><div class="n" style="font-size:18px">${s.avg?(foreign==='JPY'?fmt(s.avg*100)+' /100 JPY':fmt(s.avg)+' /'+foreign):'-'}</div></div></div><div class="card" style="margin-top:12px"><div class="field"><label>총 환전 계획 금액</label><div class="row"><input id="planAmt" type="number" value="${plan}"><button id="savePlan" class="btn">계획 저장</button></div></div><div class="meta">진행률 ${plan?Math.min(100,s.base/plan*100).toFixed(1):0}% · 남은 계획 ${money(Math.max(0,plan-s.base),currentTrip.baseCurrency)} · 보유 외화 ${money(s.foreign,foreign)}</div></div><div class="section-title"><h2>환전 내역</h2></div><div class="list">${a.length?a.map(x=>`<div class="item"><div><h4>${esc(x.date)} · ${esc(currentTrip.members[x.memberUid]?.nickname||'')}</h4><div class="sub">${money(x.baseSpent,currentTrip.baseCurrency)} → ${money(x.foreignReceived,foreign)}</div><div class="sub">실제 환율 ${foreign==='JPY'?fmt(Number(x.rate)*100)+' /100 JPY':fmt(x.rate)+' /'+foreign}</div></div><button class="btn small" data-del="exchanges:${x.id}">삭제</button></div>`).join(''):'<div class="empty">환율이 좋을 때 나눠 환전한 기록을 남겨보세요.</div>'}</div>`;$('#addExchange').onclick=exchangeForm;$('#savePlan').onclick=()=>updateDoc(doc(db,'trips',currentTrip.id),{exchangePlan:Number($('#planAmt').value||0)});bindDeletes()}
-function exchangeForm(){const foreign=currentTrip.foreignCurrencies?.[0]||'JPY';modal(`<h3>환전 기록</h3><div class="field"><label>환전자</label><select id="fxMember">${memberOptions(user.uid)}</select></div><div class="field"><label>환전일</label><input id="fxDate" type="date" value="${new Date().toISOString().slice(0,10)}"></div><div class="row"><div class="field"><label>사용한 ${currentTrip.baseCurrency}</label><input id="fxBase" type="number"></div><div class="field"><label>받은 ${foreign}</label><input id="fxForeign" type="number"></div></div><p class="note">은행/환전소에서 실제 받은 금액을 입력하면 실제 체감 환율을 계산합니다.</p><div class="row"><button class="btn" data-close="1">취소</button><button id="fxSave" class="btn primary">저장</button></div>`);setTimeout(()=>$('#fxSave').onclick=async()=>{const b=Number($('#fxBase').value),f=Number($('#fxForeign').value);await addDoc(collection(db,'trips',currentTrip.id,'exchanges'),{memberUid:$('#fxMember').value,date:$('#fxDate').value,baseSpent:b,foreignReceived:f,rate:f?b/f:0,createdAt:serverTimestamp()});closeModal()},0)}
+      const q = query(
+        tripsRef,
+        where("memberIds", "array-contains", uid)
+      );
 
-function renderPacking(){const a=cache.packing||[];$('#panel-packing').innerHTML=`<div class="section-title"><h2>준비물 체크리스트</h2><button id="addPack" class="btn primary">+ 준비물</button></div><div class="list">${a.length?a.map(x=>`<div class="item"><label class="check"><input type="checkbox" data-check="${x.id}" ${x.done?'checked':''}><span style="${x.done?'text-decoration:line-through;color:#999':''}">${esc(x.text)}</span></label><button class="btn small" data-del="packing:${x.id}">삭제</button></div>`).join(''):'<div class="empty">여권, eSIM, 상비약 등 함께 체크하세요.</div>'}</div>`;$('#addPack').onclick=()=>simpleAdd('packing','준비물 추가','준비물','text');$$('[data-check]').forEach(c=>c.onchange=()=>updateDoc(doc(db,'trips',currentTrip.id,'packing',c.dataset.check),{done:c.checked,doneBy:c.checked?user.uid:null}));bindDeletes()}
-function renderMemos(){const a=cache.memos||[];$('#panel-memos').innerHTML=`<div class="section-title"><h2>공동 메모</h2><button id="addMemo" class="btn primary">+ 메모</button></div><div class="list">${a.length?a.map(x=>`<div class="item"><div><h4>${esc(x.title||'메모')}</h4><div>${esc(x.text)}</div></div><button class="btn small" data-del="memos:${x.id}">삭제</button></div>`).join(''):'<div class="empty">예약 주의사항, 쇼핑 목록, 꼭 할 일 등을 적어두세요.</div>'}</div>`;$('#addMemo').onclick=()=>modal(`<h3>메모 추가</h3><div class="field"><label>제목</label><input id="meTitle"></div><div class="field"><label>내용</label><textarea id="meText"></textarea></div><div class="row"><button class="btn" data-close="1">취소</button><button id="meSave" class="btn primary">저장</button></div>`);document.addEventListener('click',async e=>{if(e.target.id==='meSave'){await addDoc(collection(db,'trips',currentTrip.id,'memos'),{title:$('#meTitle').value,text:$('#meText').value,createdBy:user.uid,createdAt:serverTimestamp()});closeModal()}});bindDeletes()}
-function simpleAdd(sub,title,label,key){modal(`<h3>${title}</h3><div class="field"><label>${label}</label><input id="simpleVal"></div><div class="row"><button class="btn" data-close="1">취소</button><button id="simpleSave" class="btn primary">저장</button></div>`);setTimeout(()=>$('#simpleSave').onclick=async()=>{await addDoc(collection(db,'trips',currentTrip.id,sub),{[key]:$('#simpleVal').value.trim(),done:false,createdBy:user.uid,createdAt:serverTimestamp()});closeModal()},0)}
-async function issueInviteCode(){
-  if(!currentTrip||currentTrip.ownerId!==user.uid)return;
-  const oldCode=currentTrip.inviteCode||null;
-  const newCode=code();
-  const b=writeBatch(db);
-  if(oldCode)b.delete(doc(db,'invites',oldCode));
-  b.set(doc(db,'invites',newCode),{tripId:currentTrip.id,ownerId:user.uid,createdAt:serverTimestamp()});
-  b.update(doc(db,'trips',currentTrip.id),{inviteCode:newCode});
-  await b.commit();
-  await navigator.clipboard?.writeText(newCode).catch(()=>{});
-  alert(`새 초대코드 ${newCode}가 발급되었습니다.${oldCode?' 이전 코드는 더 이상 사용할 수 없습니다.':''}`);
-}
-function renderMembers(){
-  const owner=currentTrip.ownerId===user.uid;
-  const inviteCard=owner?`<div class="card"><b>여행 입장 코드</b><p class="big">${currentTrip.inviteCode?esc(currentTrip.inviteCode):'아직 발급하지 않음'}</p><p class="note">방장만 코드를 발급할 수 있습니다. 동행자는 로그인 후 홈의 “초대코드 참가”에서 이 코드를 입력해야 여행방에 들어올 수 있습니다. 새 코드를 발급하면 이전 코드는 즉시 폐기됩니다.</p><div class="actions"><button id="issueInviteBtn" class="btn primary">${currentTrip.inviteCode?'새 코드 재발급':'초대코드 발급'}</button>${currentTrip.inviteCode?'<button id="memberCopyInvite" class="btn">코드 복사</button>':''}</div></div>`:`<div class="card"><b>초대는 방장이 관리합니다</b><p class="note">현재 여행에 이미 참여 중입니다. 새로운 동행자에게 입장 코드를 전달해야 한다면 방장에게 요청하세요.</p></div>`;
-  $('#panel-members').innerHTML=`<div class="section-title"><h2>동행자</h2></div>${inviteCard}<div class="section-title"><h2>${currentTrip.memberIds?.length||1}명 참여 중</h2></div><div class="list">${Object.entries(currentTrip.members||{}).map(([uid,m])=>`<div class="item"><div><h4>${esc(m.nickname||m.email)}</h4><div class="sub">${esc(m.email||'')} · ${m.role==='owner'?'방장':'동행자'}</div></div>${uid===user.uid?'<span class="pill">나</span>':''}</div>`).join('')}</div>`;
-  if(owner){
-    const issue=$('#issueInviteBtn');if(issue)issue.onclick=issueInviteCode;
-    const copy=$('#memberCopyInvite');if(copy)copy.onclick=async()=>{await navigator.clipboard.writeText(currentTrip.inviteCode);alert('초대코드를 복사했습니다.')};
+      const snapshot = await getDocs(q);
+
+      const tripList = snapshot.docs.map((tripDoc) => ({
+        id: tripDoc.id,
+        ...tripDoc.data(),
+      }));
+
+      setTrips(tripList);
+    } catch (error) {
+      console.error("여행 불러오기 오류:", error);
+    }
+  };
+
+  // 회원가입
+  const handleSignup = async (e) => {
+    e.preventDefault();
+    setMessage("");
+
+    if (!email.trim() || !password.trim()) {
+      setMessage("이메일과 비밀번호를 입력해주세요.");
+      return;
+    }
+
+    if (password.length < 6) {
+      setMessage("비밀번호는 6자리 이상이어야 합니다.");
+      return;
+    }
+
+    try {
+      await createUserWithEmailAndPassword(
+        auth,
+        email.trim(),
+        password
+      );
+
+      setMessage("회원가입이 완료되었습니다.");
+    } catch (error) {
+      console.error(error);
+
+      if (error.code === "auth/email-already-in-use") {
+        setMessage("이미 가입된 이메일입니다.");
+      } else if (error.code === "auth/invalid-email") {
+        setMessage("올바른 이메일 주소를 입력해주세요.");
+      } else if (error.code === "auth/weak-password") {
+        setMessage("비밀번호가 너무 짧습니다.");
+      } else {
+        setMessage(`회원가입 오류: ${error.message}`);
+      }
+    }
+  };
+
+  // 로그인
+  const handleLogin = async (e) => {
+    e.preventDefault();
+    setMessage("");
+
+    if (!email.trim() || !password.trim()) {
+      setMessage("이메일과 비밀번호를 입력해주세요.");
+      return;
+    }
+
+    try {
+      await signInWithEmailAndPassword(
+        auth,
+        email.trim(),
+        password
+      );
+
+      setMessage("");
+    } catch (error) {
+      console.error(error);
+
+      if (
+        error.code === "auth/invalid-credential" ||
+        error.code === "auth/wrong-password" ||
+        error.code === "auth/user-not-found"
+      ) {
+        setMessage("이메일 또는 비밀번호가 올바르지 않습니다.");
+      } else {
+        setMessage(`로그인 오류: ${error.message}`);
+      }
+    }
+  };
+
+  // 로그아웃
+  const handleLogout = async () => {
+    try {
+      await signOut(auth);
+    } catch (error) {
+      console.error(error);
+    }
+  };
+
+  // 새 여행 만들기
+  const handleCreateTrip = async () => {
+    if (!user) {
+      setMessage("로그인이 필요합니다.");
+      return;
+    }
+
+    if (!tripName.trim()) {
+      setMessage("여행 이름을 입력해주세요.");
+      return;
+    }
+
+    try {
+      let code = makeInviteCode();
+
+      // 혹시 같은 초대 코드가 있으면 다시 생성
+      let codeExists = true;
+
+      while (codeExists) {
+        const q = query(
+          collection(db, "trips"),
+          where("inviteCode", "==", code)
+        );
+
+        const snapshot = await getDocs(q);
+
+        if (snapshot.empty) {
+          codeExists = false;
+        } else {
+          code = makeInviteCode();
+        }
+      }
+
+      await addDoc(collection(db, "trips"), {
+        name: tripName.trim(),
+        ownerId: user.uid,
+        ownerEmail: user.email,
+        inviteCode: code,
+        memberIds: [user.uid],
+        memberEmails: [user.email],
+        createdAt: serverTimestamp(),
+      });
+
+      setTripName("");
+      setMessage(`여행이 만들어졌습니다. 초대코드: ${code}`);
+
+      await loadTrips(user.uid);
+    } catch (error) {
+      console.error("여행 생성 오류:", error);
+      setMessage(`여행 생성 오류: ${error.message}`);
+    }
+  };
+
+  // 초대코드로 여행 참가
+  const handleJoinTrip = async () => {
+    if (!user) {
+      setMessage("로그인이 필요합니다.");
+      return;
+    }
+
+    const code = inviteCode.trim().toUpperCase();
+
+    if (!code) {
+      setMessage("초대코드를 입력해주세요.");
+      return;
+    }
+
+    try {
+      const q = query(
+        collection(db, "trips"),
+        where("inviteCode", "==", code)
+      );
+
+      const snapshot = await getDocs(q);
+
+      if (snapshot.empty) {
+        setMessage("존재하지 않는 초대코드입니다.");
+        return;
+      }
+
+      const tripDocument = snapshot.docs[0];
+      const tripData = tripDocument.data();
+
+      if (tripData.memberIds?.includes(user.uid)) {
+        setMessage("이미 참여 중인 여행입니다.");
+        return;
+      }
+
+      await updateDoc(doc(db, "trips", tripDocument.id), {
+        memberIds: arrayUnion(user.uid),
+        memberEmails: arrayUnion(user.email),
+      });
+
+      setInviteCode("");
+      setMessage(`"${tripData.name}" 여행에 참여했습니다.`);
+
+      await loadTrips(user.uid);
+    } catch (error) {
+      console.error("여행 참가 오류:", error);
+      setMessage(`여행 참가 오류: ${error.message}`);
+    }
+  };
+
+  if (loading) {
+    return (
+      <div style={styles.center}>
+        <h2>불러오는 중...</h2>
+      </div>
+    );
   }
+
+  // 로그인 전 화면
+  if (!user) {
+    return (
+      <div style={styles.page}>
+        <div style={styles.authCard}>
+          <div style={styles.logo}>✈️</div>
+
+          <h1 style={styles.title}>우리의 여행</h1>
+
+          <p style={styles.subtitle}>
+            함께 만드는 여행 계획
+          </p>
+
+          <form
+            onSubmit={
+              authMode === "login"
+                ? handleLogin
+                : handleSignup
+            }
+          >
+            <input
+              style={styles.input}
+              type="email"
+              placeholder="이메일"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              autoComplete="email"
+            />
+
+            <input
+              style={styles.input}
+              type="password"
+              placeholder="비밀번호"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              autoComplete={
+                authMode === "login"
+                  ? "current-password"
+                  : "new-password"
+              }
+            />
+
+            <button
+              style={styles.mainButton}
+              type="submit"
+            >
+              {authMode === "login"
+                ? "로그인"
+                : "회원가입"}
+            </button>
+          </form>
+
+          <button
+            style={styles.textButton}
+            type="button"
+            onClick={() => {
+              setMessage("");
+              setAuthMode(
+                authMode === "login"
+                  ? "signup"
+                  : "login"
+              );
+            }}
+          >
+            {authMode === "login"
+              ? "처음이신가요? 회원가입"
+              : "이미 계정이 있나요? 로그인"}
+          </button>
+
+          {message && (
+            <div style={styles.message}>
+              {message}
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  // 로그인 후 화면
+  return (
+    <div style={styles.page}>
+      <div style={styles.container}>
+        <header style={styles.header}>
+          <div>
+            <div style={styles.smallText}>
+              반가워요 👋
+            </div>
+
+            <h1 style={styles.headerTitle}>
+              우리의 여행
+            </h1>
+          </div>
+
+          <button
+            style={styles.logoutButton}
+            onClick={handleLogout}
+          >
+            로그아웃
+          </button>
+        </header>
+
+        <div style={styles.userBox}>
+          {user.email}
+        </div>
+
+        {message && (
+          <div style={styles.message}>
+            {message}
+          </div>
+        )}
+
+        <section style={styles.card}>
+          <h2 style={styles.cardTitle}>
+            새 여행 만들기
+          </h2>
+
+          <p style={styles.description}>
+            여행을 만들면 친구에게 알려줄
+            초대코드가 자동으로 생성됩니다.
+          </p>
+
+          <input
+            style={styles.input}
+            placeholder="예: 2026 도쿄 여행"
+            value={tripName}
+            onChange={(e) =>
+              setTripName(e.target.value)
+            }
+          />
+
+          <button
+            style={styles.mainButton}
+            onClick={handleCreateTrip}
+          >
+            여행 만들기
+          </button>
+        </section>
+
+        <section style={styles.card}>
+          <h2 style={styles.cardTitle}>
+            초대코드로 참여하기
+          </h2>
+
+          <p style={styles.description}>
+            여행 주인에게 받은 6자리 코드를
+            입력해주세요.
+          </p>
+
+          <input
+            style={{
+              ...styles.input,
+              textTransform: "uppercase",
+              letterSpacing: "4px",
+              fontWeight: "bold",
+              textAlign: "center",
+            }}
+            maxLength={6}
+            placeholder="ABC123"
+            value={inviteCode}
+            onChange={(e) =>
+              setInviteCode(
+                e.target.value.toUpperCase()
+              )
+            }
+          />
+
+          <button
+            style={styles.secondaryButton}
+            onClick={handleJoinTrip}
+          >
+            여행 참여하기
+          </button>
+        </section>
+
+        <section>
+          <h2 style={styles.sectionTitle}>
+            내 여행
+          </h2>
+
+          {trips.length === 0 ? (
+            <div style={styles.empty}>
+              아직 참여 중인 여행이 없습니다.
+              <br />
+              새 여행을 만들거나 초대코드를
+              입력해보세요.
+            </div>
+          ) : (
+            trips.map((trip) => (
+              <div
+                style={styles.tripCard}
+                key={trip.id}
+              >
+                <div>
+                  <div style={styles.tripName}>
+                    {trip.name}
+                  </div>
+
+                  <div style={styles.tripInfo}>
+                    {trip.ownerId === user.uid
+                      ? "내가 만든 여행"
+                      : "초대받은 여행"}
+                  </div>
+                </div>
+
+                {trip.ownerId === user.uid && (
+                  <div style={styles.codeBox}>
+                    <span style={styles.codeLabel}>
+                      초대코드
+                    </span>
+
+                    <strong>
+                      {trip.inviteCode}
+                    </strong>
+                  </div>
+                )}
+              </div>
+            ))
+          )}
+        </section>
+      </div>
+    </div>
+  );
 }
 
-function bindDeletes(){$$('[data-del]').forEach(b=>b.onclick=async()=>{const [sub,id]=b.dataset.del.split(':');if(confirm('삭제할까요?'))await deleteDoc(doc(db,'trips',currentTrip.id,sub,id))})}
+const styles = {
+  page: {
+    minHeight: "100vh",
+    background: "#f8f5ef",
+    fontFamily:
+      "'Pretendard', 'Noto Sans KR', sans-serif",
+    color: "#3f3a35",
+  },
+
+  center: {
+    minHeight: "100vh",
+    display: "flex",
+    justifyContent: "center",
+    alignItems: "center",
+    background: "#f8f5ef",
+  },
+
+  container: {
+    width: "min(92%, 620px)",
+    margin: "0 auto",
+    padding: "30px 0 70px",
+  },
+
+  authCard: {
+    width: "min(85%, 400px)",
+    margin: "0 auto",
+    paddingTop: "100px",
+    textAlign: "center",
+  },
+
+  logo: {
+    fontSize: "52px",
+    marginBottom: "16px",
+  },
+
+  title: {
+    margin: "0",
+    fontSize: "30px",
+    letterSpacing: "-1px",
+  },
+
+  subtitle: {
+    margin: "10px 0 35px",
+    color: "#8a8178",
+  },
+
+  input: {
+    width: "100%",
+    boxSizing: "border-box",
+    padding: "16px 18px",
+    marginBottom: "12px",
+    borderRadius: "16px",
+    border: "1px solid #e4ddd3",
+    background: "#fff",
+    fontSize: "16px",
+    outline: "none",
+  },
+
+  mainButton: {
+    width: "100%",
+    padding: "16px",
+    border: "none",
+    borderRadius: "16px",
+    background: "#5f8068",
+    color: "#fff",
+    fontSize: "16px",
+    fontWeight: "700",
+    cursor: "pointer",
+  },
+
+  secondaryButton: {
+    width: "100%",
+    padding: "16px",
+    border: "none",
+    borderRadius: "16px",
+    background: "#d9a36c",
+    color: "#fff",
+    fontSize: "16px",
+    fontWeight: "700",
+    cursor: "pointer",
+  },
+
+  textButton: {
+    marginTop: "18px",
+    border: "none",
+    background: "transparent",
+    color: "#6f796e",
+    cursor: "pointer",
+    fontSize: "14px",
+  },
+
+  message: {
+    marginTop: "18px",
+    padding: "14px",
+    borderRadius: "14px",
+    background: "#fff4df",
+    color: "#7b5b32",
+    fontSize: "14px",
+    lineHeight: "1.5",
+  },
+
+  header: {
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: "16px",
+  },
+
+  smallText: {
+    color: "#9a9187",
+    fontSize: "14px",
+  },
+
+  headerTitle: {
+    margin: "3px 0 0",
+    fontSize: "29px",
+  },
+
+  logoutButton: {
+    padding: "9px 13px",
+    borderRadius: "12px",
+    border: "1px solid #ded7ce",
+    background: "#fff",
+    color: "#6c655e",
+    cursor: "pointer",
+  },
+
+  userBox: {
+    fontSize: "13px",
+    color: "#898078",
+    marginBottom: "24px",
+  },
+
+  card: {
+    padding: "24px",
+    marginBottom: "18px",
+    background: "#fff",
+    borderRadius: "24px",
+    boxShadow:
+      "0 8px 30px rgba(95, 80, 60, 0.06)",
+  },
+
+  cardTitle: {
+    margin: "0 0 8px",
+    fontSize: "19px",
+  },
+
+  description: {
+    margin: "0 0 18px",
+    color: "#8c837a",
+    fontSize: "14px",
+    lineHeight: "1.6",
+  },
+
+  sectionTitle: {
+    margin: "32px 0 15px",
+    fontSize: "21px",
+  },
+
+  tripCard: {
+    padding: "20px",
+    marginBottom: "12px",
+    borderRadius: "20px",
+    background: "#fff",
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "center",
+    boxShadow:
+      "0 5px 24px rgba(95, 80, 60, 0.05)",
+  },
+
+  tripName: {
+    fontSize: "17px",
+    fontWeight: "700",
+  },
+
+  tripInfo: {
+    marginTop: "5px",
+    color: "#918880",
+    fontSize: "13px",
+  },
+
+  codeBox: {
+    display: "flex",
+    flexDirection: "column",
+    textAlign: "right",
+    padding: "8px 12px",
+    borderRadius: "12px",
+    background: "#f3eee6",
+    letterSpacing: "1px",
+  },
+
+  codeLabel: {
+    marginBottom: "3px",
+    fontSize: "10px",
+    color: "#988c80",
+    letterSpacing: "0",
+  },
+
+  empty: {
+    padding: "35px 20px",
+    borderRadius: "20px",
+    background: "#efeae2",
+    textAlign: "center",
+    color: "#8b837a",
+    lineHeight: "1.7",
+    fontSize: "14px",
+  },
+};
+
+export default App;
