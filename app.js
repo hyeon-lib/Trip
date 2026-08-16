@@ -95,23 +95,22 @@ function renderTripGrid(trips,status=''){
 }
 async function repairOwnedTrip(trip){
   if(trip.ownerId!==user.uid||tripRepairing.has(trip.id))return;
-  const missingMember=!Array.isArray(trip.memberIds)||!trip.memberIds.includes(user.uid);
-  const missingProfile=!trip.members?.[user.uid];
-  const missingCode=!trip.inviteCode;
-  if(!missingMember&&!missingProfile&&!missingCode)return;
+  const currentMemberIds=Array.isArray(trip.memberIds)?trip.memberIds:[],bannedIds=Array.isArray(trip.bannedMemberIds)?trip.bannedMemberIds:[],profileMemberIds=Object.keys(trip.members||{}).filter(uid=>!bannedIds.includes(uid));
+  const repairedMemberIds=[...new Set([user.uid,...currentMemberIds,...profileMemberIds])].filter(uid=>!bannedIds.includes(uid)||uid===user.uid);
+  const missingMemberLinks=repairedMemberIds.some(uid=>!currentMemberIds.includes(uid))||currentMemberIds.some(uid=>!repairedMemberIds.includes(uid));
+  const missingProfile=!trip.members?.[user.uid],missingCode=!trip.inviteCode;
+  if(!missingMemberLinks&&!missingProfile&&!missingCode)return;
   tripRepairing.add(trip.id);
   try{
     let roomCode=trip.inviteCode||code(),inviteSnap=await getDoc(doc(db,'invites',roomCode));
-    if(inviteSnap.exists()&&inviteSnap.data().tripId!==trip.id){
-      roomCode=code();inviteSnap=await getDoc(doc(db,'invites',roomCode));
-    }
+    if(inviteSnap.exists()&&inviteSnap.data().tripId!==trip.id){roomCode=code();inviteSnap=await getDoc(doc(db,'invites',roomCode))}
     const nick=user.displayName||user.email,batch=writeBatch(db);
-    batch.update(doc(db,'trips',trip.id),{memberIds:arrayUnion(user.uid),[`members.${user.uid}`]:{nickname:nick,email:user.email,role:'owner'},bannedMemberIds:Array.isArray(trip.bannedMemberIds)?trip.bannedMemberIds:[],inviteCode:roomCode,updatedAt:serverTimestamp(),updatedBy:user.uid});
+    batch.update(doc(db,'trips',trip.id),{memberIds:repairedMemberIds,[`members.${user.uid}`]:trip.members?.[user.uid]||{nickname:nick,email:user.email,role:'owner'},bannedMemberIds:bannedIds,inviteCode:roomCode,updatedAt:serverTimestamp(),updatedBy:user.uid});
     if(!inviteSnap.exists())batch.set(doc(db,'invites',roomCode),{tripId:trip.id,ownerId:user.uid,createdAt:serverTimestamp(),permanent:true});
     await batch.commit();
   }catch(e){
-    console.error('소유 여행 자동 복구 실패',trip.id,e);
-    renderTripGrid(readTripBackup(),`여행 소유권 정보 복구에 실패했습니다. Firebase Rules를 최신 버전으로 게시해 주세요: ${e.message||e}`);
+    console.error('여행 참여자 접근 자동 복구 실패',trip.id,e);
+    renderTripGrid(readTripBackup(),`여행 참여자 정보 복구에 실패했습니다. Firebase 연결을 확인해 주세요: ${e.message||e}`);
   }finally{tripRepairing.delete(trip.id)}
 }
 function listenTrips(){
