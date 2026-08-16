@@ -11,3 +11,5 @@
 @media(max-width:620px){.shell{padding:12px}.grid{grid-template-columns:1fr}.row{grid-template-columns:1fr}.kpis{grid-template-columns:1fr 1fr}.hero{padding:22px}.hero h1{font-size:28px}.weather-grid{grid-template-columns:1fr 1fr}.topbar{padding:12px}.timeline .slot{grid-template-columns:58px 1fr}.timeline .slot .actions{grid-column:2}}
 
 .danger-btn{background:#fff0ee!important;color:#a72f2f!important;border:1px solid #efc4bf!important}.danger-btn:hover{background:#ffe2de!important}.leave-card{margin-top:10px;border-color:#efc4bf}
+
+.changed-title{margin-top:32px;padding-top:18px;border-top:2px dashed var(--line)}.changed-title .note{margin:5px 0 0}.changed-plans{border-color:#e8b987;background:#fffaf0}.weather-card .pill{margin:7px 0;font-size:11px}.weather-card.trip-weather{border-color:var(--accent);box-shadow:0 0 0 2px var(--accent2)}.weather-card.unavailable{background:#f7f4f1;color:var(--muted)}.weather-unavailable{padding:18px 2px 8px;font-size:13px;line-height:1.5}
