@@ -271,14 +271,19 @@ function placeGroups(items,mode){
 }
 let googleMapsLoadPromise=null,loadedGoogleMapsKey='';
 function googleMapsApiForm(){
-  const hasKey=!!currentTrip.googleMapsApiKey;
-  modal(`<h3>이 여행방의 Google Maps API</h3><div class="field"><label>Google Maps API 키</label><input id="gmApiKey" type="password" autocomplete="off" value="${esc(currentTrip.googleMapsApiKey||'')}" placeholder="AIza..."></div><div class="card api-warning"><b>이 여행방에서만 사용됩니다</b><p class="note">이 키는 현재 여행방의 멤버만 불러올 수 있습니다. 다른 여행방에는 공유되지 않습니다. 브라우저에서 사용하는 키이므로 Google Cloud에서 웹사이트 제한을 https://hyeon-lib.github.io/Trip/* 로 설정하고, Maps JavaScript API와 Places API (New)만 허용하세요.</p></div><p id="gmApiMsg" class="note"></p><div class="row">${hasKey?'<button id="gmApiDelete" class="btn danger-btn">등록 해제</button>':'<button class="btn" data-close="1">취소</button>'}<button id="gmApiSave" class="btn primary">API 등록</button></div>`);
+  if(currentTrip.googleMapsApiKey)return alert('이 여행방에는 API가 이미 등록되어 있습니다. 기존 키 번호는 화면에서 다시 확인할 수 없습니다.');
+  const hasKey=false;
+  modal(`<h3>이 여행방의 Google Maps API</h3><div class="field"><label>Google Maps API 키</label><input id="gmApiKey" type="password" autocomplete="off" value="" placeholder="AIza..."></div><div class="card api-warning"><b>이 여행방에서만 사용됩니다</b><p class="note">이 키는 현재 여행방의 멤버만 불러올 수 있습니다. 다른 여행방에는 공유되지 않습니다. 브라우저에서 사용하는 키이므로 Google Cloud에서 웹사이트 제한을 https://hyeon-lib.github.io/Trip/* 로 설정하고, Maps JavaScript API와 Places API (New)만 허용하세요.</p></div><p id="gmApiMsg" class="note"></p><div class="row"><button class="btn" data-close="1">취소</button><button id="gmApiSave" class="btn primary">API 등록</button></div>`);
   $('#gmApiSave').onclick=async()=>{
     const key=$('#gmApiKey').value.trim(),button=$('#gmApiSave'),message=$('#gmApiMsg');
     if(!key)return message.textContent='API 키를 입력해 주세요.';
     try{button.disabled=true;await updateDoc(doc(db,'trips',currentTrip.id),{googleMapsApiKey:key,googleMapsApiUpdatedBy:user.uid,googleMapsApiUpdatedAt:serverTimestamp()});closeModal()}catch(e){message.textContent=`저장하지 못했습니다: ${e.message||e}`;button.disabled=false}
   };
-  if(hasKey)$('#gmApiDelete').onclick=async()=>{if(!confirm('이 여행방의 Google Maps API 등록을 해제할까요?'))return;await updateDoc(doc(db,'trips',currentTrip.id),{googleMapsApiKey:deleteField(),googleMapsApiUpdatedBy:deleteField(),googleMapsApiUpdatedAt:deleteField()});closeModal()};
+}
+async function removeGoogleMapsApi(){
+  if(currentTrip.ownerId!==user.uid)return;
+  if(!confirm('이 여행방의 API 등록을 해제할까요? 키 번호는 표시되지 않으며, 해제 후 새 키를 등록할 수 있습니다.'))return;
+  await updateDoc(doc(db,'trips',currentTrip.id),{googleMapsApiKey:deleteField(),googleMapsApiUpdatedBy:deleteField(),googleMapsApiUpdatedAt:deleteField()});
 }
 function loadGoogleMapsApi(key){
   if(window.google?.maps){
@@ -338,8 +343,8 @@ function renderPlaces(){
   if(!currentTrip)return;
   const saved=cache.places||[],groups=placeGroups(saved,placeViewMode),hasApi=!!currentTrip.googleMapsApiKey;
   const groupedHtml=groups.map(group=>`<section class="place-group"><div class="section-title"><h3>${esc(group.label)}</h3><span class="pill">${group.places.length}곳</span></div><div class="list">${group.places.map(placeCard).join('')}</div></section>`).join('');
-  $('#panel-places').innerHTML=`<div class="section-title"><h2>추천 장소</h2><div class="actions"><button id="googleApiSettings" class="btn">${hasApi?'API 등록됨':'API 등록'}</button>${hasApi?'<button id="googlePlaceSearch" class="btn primary">Google 장소 검색</button>':''}<button id="addPlaceManual" class="btn primary">+ 링크로 등록</button></div></div><div class="card"><p class="note">${hasApi?'이 여행방에 등록된 API로 모든 방 멤버가 Google 장소를 검색할 수 있습니다.':'API를 등록하면 이 여행방 멤버만 Google 장소 검색을 함께 사용할 수 있습니다. 링크 직접 등록은 API 없이도 무료로 사용할 수 있습니다.'}</p><div class="actions"><button class="btn ${placeViewMode==='category'?'primary':''}" data-place-mode="category">분야별 보기</button><button class="btn ${placeViewMode==='location'?'primary':''}" data-place-mode="location">위치별 보기</button></div></div>${saved.length?groupedHtml:'<div class="empty">Google Maps 검색이나 공유 링크로 후보 장소를 저장해보세요.</div>'}`;
-  $('#googleApiSettings').onclick=googleMapsApiForm;if(hasApi)$('#googlePlaceSearch').onclick=googlePlaceSearchForm;$('#addPlaceManual').onclick=placeForm;
+  $('#panel-places').innerHTML=`<div class="section-title"><h2>추천 장소</h2><div class="actions">${hasApi?'<button class="btn" disabled>API 등록 완료</button>':'<button id="googleApiSettings" class="btn">API 등록</button>'}${hasApi?'<button id="googlePlaceSearch" class="btn primary">Google 장소 검색</button>':''}${hasApi&&currentTrip.ownerId===user.uid?'<button id="googleApiRemove" class="btn danger-btn">API 등록 해제</button>':''}<button id="addPlaceManual" class="btn primary">+ 링크로 등록</button></div></div><div class="card"><p class="note">${hasApi?'이 여행방에 등록된 API로 모든 방 멤버가 Google 장소를 검색할 수 있습니다.':'API를 등록하면 이 여행방 멤버만 Google 장소 검색을 함께 사용할 수 있습니다. 링크 직접 등록은 API 없이도 무료로 사용할 수 있습니다.'}</p><div class="actions"><button class="btn ${placeViewMode==='category'?'primary':''}" data-place-mode="category">분야별 보기</button><button class="btn ${placeViewMode==='location'?'primary':''}" data-place-mode="location">위치별 보기</button></div></div>${saved.length?groupedHtml:'<div class="empty">Google Maps 검색이나 공유 링크로 후보 장소를 저장해보세요.</div>'}`;
+  if(!hasApi)$('#googleApiSettings').onclick=googleMapsApiForm;if(hasApi)$('#googlePlaceSearch').onclick=googlePlaceSearchForm;if(hasApi&&currentTrip.ownerId===user.uid)$('#googleApiRemove').onclick=removeGoogleMapsApi;$('#addPlaceManual').onclick=placeForm;
   $$('[data-place-mode]').forEach(b=>b.onclick=()=>{placeViewMode=b.dataset.placeMode;renderPlaces()});$$('[data-to-it]').forEach(b=>b.onclick=()=>formIt(b.dataset.toIt));bindDeletes();
 }
 function placeForm(){
