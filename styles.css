@@ -15,3 +15,5 @@
 .changed-title{margin-top:32px;padding-top:18px;border-top:2px dashed var(--line)}.changed-title .note{margin:5px 0 0}.changed-plans{border-color:#e8b987;background:#fffaf0}.weather-card .pill{margin:7px 0;font-size:11px}.weather-card.trip-weather{border-color:var(--accent);box-shadow:0 0 0 2px var(--accent2)}.weather-card.unavailable{background:#f7f4f1;color:var(--muted)}.weather-unavailable{padding:18px 2px 8px;font-size:13px;line-height:1.5}
 
 .place-group{margin-top:18px}.place-group>.section-title{margin-bottom:8px}.place-group>.section-title h3{margin:0}.place-group .actions{display:flex;flex-wrap:wrap;justify-content:flex-end}.place-group a.btn{text-decoration:none}@media(max-width:620px){.place-group .item{flex-direction:column}.place-group .actions{width:100%;justify-content:flex-start}}
+
+.data-status{grid-column:1/-1;padding:10px 12px;border:1px solid #e8cf9a;background:#fff8df;color:#755b24;border-radius:12px;font-size:13px;line-height:1.45}
