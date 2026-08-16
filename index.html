@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="ko">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Together Trip</title><link rel="stylesheet" href="styles.css"></head>
+<body>
+<header class="topbar"><div class="brand">Together <span>Trip</span></div><div class="userbox"><span id="userLabel" class="muted"></span><button id="logoutBtn" class="btn ghost hidden">로그아웃</button></div></header>
+<main class="shell">
+  <section id="authView" class="auth card">
+    <h1>함께 만드는 여행</h1><p class="muted">로그인하면 여행별로 독립된 공간을 만들고 동행자와 함께 편집할 수 있어요.</p>
+    <div class="field"><label>이메일</label><input id="email" type="email" placeholder="you@example.com"></div>
+    <div class="field"><label>비밀번호</label><input id="password" type="password" placeholder="6자 이상"></div>
+    <div class="field"><label>닉네임</label><input id="nickname" placeholder="여행에서 사용할 이름"></div>
+    <div class="row"><button id="loginBtn" class="btn primary">로그인</button><button id="signupBtn" class="btn">회원가입</button></div>
+    <div class="divider"></div><button id="googleBtn" class="btn ghost" style="width:100%">Google로 로그인</button>
+    <p id="authMsg" class="note"></p>
+  </section>
+
+  <section id="homeView" class="hidden">
+    <div class="hero"><h1>우리의 다음 여행은?</h1><p>여행방 하나에 일정, 돈, 날씨, 숙소, 항공, 준비물을 모두 모아두세요.</p></div>
+    <div class="section-title"><h2>내 여행</h2><div><button id="joinTripBtn" class="btn ghost">초대코드 참가</button> <button id="newTripBtn" class="btn primary">+ 새 여행</button></div></div>
+    <div id="tripGrid" class="grid"></div>
+  </section>
+
+  <section id="tripView" class="hidden">
+    <button id="backBtn" class="btn ghost">← 여행 목록</button>
+    <div class="trip-head"><div><h1 id="tripTitle"></h1><div id="tripMeta" class="muted"></div></div><div><span id="inviteCode" class="pill"></span> <button id="copyInviteBtn" class="btn small">초대코드 복사</button></div></div>
+    <div class="tabs" id="tabs"></div>
+    <div id="panel-overview" class="panel active"></div>
+    <div id="panel-itinerary" class="panel"></div>
+    <div id="panel-places" class="panel"></div>
+    <div id="panel-weather" class="panel"></div>
+    <div id="panel-flights" class="panel"></div>
+    <div id="panel-stays" class="panel"></div>
+    <div id="panel-money" class="panel"></div>
+    <div id="panel-exchange" class="panel"></div>
+    <div id="panel-packing" class="panel"></div>
+    <div id="panel-memos" class="panel"></div>
+    <div id="panel-members" class="panel"></div>
+  </section>
+</main>
+<div id="modal" class="modal hidden"><div class="modal-card"><div id="modalBody"></div></div></div>
+<script type="module" src="app.js"></script>
+</body></html>
