@@ -49,3 +49,7 @@
 
 .trip-trash{grid-column:1/-1;margin-top:18px;padding-top:8px;border-top:1px solid var(--line,#e5e7eb)}
 .trip-card.trashed{opacity:.82}
+
+.google-result-card{position:relative;padding-right:54px}
+.map-result-icon{position:absolute;top:10px;right:10px;display:grid;place-items:center;width:40px;height:40px;border:1px solid var(--line,#e5e7eb);border-radius:50%;background:#fff;font-size:21px;text-decoration:none;box-shadow:0 2px 8px rgba(0,0,0,.08)}
+.map-result-icon:hover{transform:translateY(-1px);border-color:var(--primary,#6750a4)}
