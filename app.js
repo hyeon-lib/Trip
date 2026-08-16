@@ -70,13 +70,28 @@ function readTripBackup(){
 }
 function writeTripBackup(trips){
   try{
-    const safe=trips.map(t=>({id:t.id,name:t.name||'여행',destination:t.destination||'',startDate:t.startDate||'',endDate:t.endDate||'',memberIds:Array.isArray(t.memberIds)?t.memberIds:[]}));
+    const safe=trips.map(t=>({id:t.id,name:t.name||'여행',destination:t.destination||'',startDate:t.startDate||'',endDate:t.endDate||'',ownerId:t.ownerId||'',deletedAt:t.deletedAt||null,memberIds:Array.isArray(t.memberIds)?t.memberIds:[]}));
     localStorage.setItem(tripBackupKey(user.uid),JSON.stringify(safe));
   }catch(e){console.warn('여행 목록 백업 실패',e)}
 }
+async function moveTripToTrash(tripId){
+  const trip=[...document.querySelectorAll('[data-delete-trip]')].find(x=>x.dataset.deleteTrip===tripId);
+  const name=trip?.dataset.tripName||'이 여행';
+  if(!confirm(`"${name}" 여행방을 없앨까요?\n\n모든 동행자의 홈에서 사라지지만 방장이 나중에 복구할 수 있습니다.`))return;
+  try{await updateDoc(doc(db,'trips',tripId),{deletedAt:serverTimestamp(),deletedBy:user.uid,updatedAt:serverTimestamp(),updatedBy:user.uid})}catch(e){alert(`여행방을 없애지 못했습니다: ${e.message||e}`)}
+}
+async function restoreTrip(tripId){
+  if(!confirm('이 여행방을 복구할까요? 모든 동행자의 홈에 다시 표시됩니다.'))return;
+  try{await updateDoc(doc(db,'trips',tripId),{deletedAt:deleteField(),deletedBy:deleteField(),updatedAt:serverTimestamp(),updatedBy:user.uid})}catch(e){alert(`여행방을 복구하지 못했습니다: ${e.message||e}`)}
+}
 function renderTripGrid(trips,status=''){
-  $('#tripGrid').innerHTML=`${status?`<div class="data-status">${esc(status)}</div>`:''}${trips.length?trips.map(t=>`<article class="card trip-card"><div><span class="pill">${esc(t.destination||'여행')}</span></div><h3>${esc(t.name)}</h3><div class="meta">${esc(t.startDate||'')} ~ ${esc(t.endDate||'')} · ${t.memberIds?.length||1}명</div><button class="btn primary" data-open-trip="${t.id}">여행방 열기</button></article>`).join(''):'<div class="empty">아직 여행이 없어요. 새 여행을 만들어보세요.</div>'}`;
+  const active=trips.filter(t=>!t.deletedAt),trashed=trips.filter(t=>t.deletedAt&&t.ownerId===user.uid);
+  const activeHtml=active.length?active.map(t=>`<article class="card trip-card"><div><span class="pill">${esc(t.destination||'여행')}</span></div><h3>${esc(t.name)}</h3><div class="meta">${esc(t.startDate||'')} ~ ${esc(t.endDate||'')} · ${t.memberIds?.length||1}명</div><div class="actions"><button class="btn primary" data-open-trip="${t.id}">여행방 열기</button>${t.ownerId===user.uid?`<button class="btn danger-btn" data-delete-trip="${t.id}" data-trip-name="${esc(t.name)}">여행방 없애기</button>`:''}</div></article>`).join(''):'<div class="empty">아직 여행이 없어요. 새 여행을 만들어보세요.</div>';
+  const trashHtml=trashed.length?`<div class="trip-trash"><div class="section-title"><h2>최근 없앤 여행방</h2></div><div class="grid">${trashed.map(t=>`<article class="card trip-card trashed"><span class="pill">휴지통</span><h3>${esc(t.name)}</h3><div class="meta">${esc(t.startDate||'')} ~ ${esc(t.endDate||'')}</div><button class="btn" data-restore-trip="${t.id}">여행방 복구</button></article>`).join('')}</div></div>`:'';
+  $('#tripGrid').innerHTML=`${status?`<div class="data-status">${esc(status)}</div>`:''}${activeHtml}${trashHtml}`;
   $$('[data-open-trip]').forEach(b=>b.onclick=()=>openTrip(b.dataset.openTrip));
+  $$('[data-delete-trip]').forEach(b=>b.onclick=()=>moveTripToTrash(b.dataset.deleteTrip));
+  $$('[data-restore-trip]').forEach(b=>b.onclick=()=>restoreTrip(b.dataset.restoreTrip));
 }
 async function repairOwnedTrip(trip){
   if(trip.ownerId!==user.uid||tripRepairing.has(trip.id))return;
