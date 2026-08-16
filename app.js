@@ -35,6 +35,7 @@ $('#logoutBtn').onclick=()=>signOut(auth); $('#backBtn').onclick=()=>showHome();
 onAuthStateChanged(auth,u=>{user=u;$('#authView').classList.toggle('hidden',!!u);$('#homeView').classList.toggle('hidden',!u);$('#logoutBtn').classList.toggle('hidden',!u);$('#userLabel').textContent=u?(u.displayName||u.email):'';if(u)listenTrips();else cleanup()});
 function cleanup(){if(tripUnsub)tripUnsub();subUnsubs.forEach(f=>f());subUnsubs=[];currentTrip=null}
 const tripBackupKey=uid=>`together-trip:last-trips:${firebaseConfig.projectId}:${uid}`;
+const tripRepairing=new Set();
 function readTripBackup(){
   try{return JSON.parse(localStorage.getItem(tripBackupKey(user.uid))||'[]')}catch{return[]}
 }
@@ -48,26 +49,54 @@ function renderTripGrid(trips,status=''){
   $('#tripGrid').innerHTML=`${status?`<div class="data-status">${esc(status)}</div>`:''}${trips.length?trips.map(t=>`<article class="card trip-card"><div><span class="pill">${esc(t.destination||'여행')}</span></div><h3>${esc(t.name)}</h3><div class="meta">${esc(t.startDate||'')} ~ ${esc(t.endDate||'')} · ${t.memberIds?.length||1}명</div><button class="btn primary" data-open-trip="${t.id}">여행방 열기</button></article>`).join(''):'<div class="empty">아직 여행이 없어요. 새 여행을 만들어보세요.</div>'}`;
   $$('[data-open-trip]').forEach(b=>b.onclick=()=>openTrip(b.dataset.openTrip));
 }
+async function repairOwnedTrip(trip){
+  if(trip.ownerId!==user.uid||tripRepairing.has(trip.id))return;
+  const missingMember=!Array.isArray(trip.memberIds)||!trip.memberIds.includes(user.uid);
+  const missingProfile=!trip.members?.[user.uid];
+  const missingCode=!trip.inviteCode;
+  if(!missingMember&&!missingProfile&&!missingCode)return;
+  tripRepairing.add(trip.id);
+  try{
+    let roomCode=trip.inviteCode||code(),inviteSnap=await getDoc(doc(db,'invites',roomCode));
+    if(inviteSnap.exists()&&inviteSnap.data().tripId!==trip.id){
+      roomCode=code();inviteSnap=await getDoc(doc(db,'invites',roomCode));
+    }
+    const nick=user.displayName||user.email,batch=writeBatch(db);
+    batch.update(doc(db,'trips',trip.id),{memberIds:arrayUnion(user.uid),[`members.${user.uid}`]:{nickname:nick,email:user.email,role:'owner'},bannedMemberIds:Array.isArray(trip.bannedMemberIds)?trip.bannedMemberIds:[],inviteCode:roomCode,updatedAt:serverTimestamp(),updatedBy:user.uid});
+    if(!inviteSnap.exists())batch.set(doc(db,'invites',roomCode),{tripId:trip.id,ownerId:user.uid,createdAt:serverTimestamp(),permanent:true});
+    await batch.commit();
+  }catch(e){
+    console.error('소유 여행 자동 복구 실패',trip.id,e);
+    renderTripGrid(readTripBackup(),`여행 소유권 정보 복구에 실패했습니다. Firebase Rules를 최신 버전으로 게시해 주세요: ${e.message||e}`);
+  }finally{tripRepairing.delete(trip.id)}
+}
 function listenTrips(){
-  const q=query(collection(db,'trips'),where('memberIds','array-contains',user.uid));
   if(tripUnsub)tripUnsub();
-  const backup=readTripBackup();
+  const backup=readTripBackup(),memberMap=new Map(),ownerMap=new Map();
+  let memberReady=false,ownerReady=false,memberFromCache=true,ownerFromCache=true;
   if(backup.length)renderTripGrid(backup,'마지막으로 저장된 여행 목록을 불러왔습니다. Firebase와 동기화 중입니다.');
-  tripUnsub=onSnapshot(q,{includeMetadataChanges:true},snapshot=>{
-    const trips=snapshot.docs.map(d=>({id:d.id,...d.data()}));
-    if(trips.length||!snapshot.metadata.fromCache){
-      writeTripBackup(trips);
-      renderTripGrid(trips,snapshot.metadata.fromCache?'오프라인 캐시의 여행 목록입니다. 연결되면 자동 동기화됩니다.':'');
+  const renderMerged=()=>{
+    const trips=[...new Map([...memberMap,...ownerMap]).values()].sort((a,b)=>(a.startDate||'').localeCompare(b.startDate||''));
+    const bothReady=memberReady&&ownerReady,fromCache=memberFromCache||ownerFromCache;
+    if(trips.length||bothReady&&!fromCache){
+      writeTripBackup(trips);renderTripGrid(trips,fromCache?'오프라인 캐시와 동기화 중입니다. 기존 기록은 유지됩니다.':'');
     }else if(backup.length){
       renderTripGrid(backup,'네트워크 또는 권한 확인 중입니다. 기존 여행 기록은 삭제되지 않았습니다.');
-    }else{
-      renderTripGrid([]);
     }
-  },error=>{
+  };
+  const onError=error=>{
     console.error('여행 목록 구독 실패',error);
-    const saved=readTripBackup();
-    renderTripGrid(saved,`Firebase에서 여행을 불러오지 못했습니다. 기록은 삭제되지 않았습니다: ${error.message||error}`);
-  });
+    renderTripGrid(readTripBackup(),`Firebase에서 여행을 불러오지 못했습니다. 기록은 삭제되지 않았습니다: ${error.message||error}`);
+  };
+  const memberQuery=query(collection(db,'trips'),where('memberIds','array-contains',user.uid));
+  const ownerQuery=query(collection(db,'trips'),where('ownerId','==',user.uid));
+  const memberUnsub=onSnapshot(memberQuery,{includeMetadataChanges:true},snapshot=>{
+    memberMap.clear();snapshot.docs.forEach(d=>memberMap.set(d.id,{id:d.id,...d.data()}));memberReady=true;memberFromCache=snapshot.metadata.fromCache;renderMerged();
+  },onError);
+  const ownerUnsub=onSnapshot(ownerQuery,{includeMetadataChanges:true},snapshot=>{
+    ownerMap.clear();snapshot.docs.forEach(d=>{const trip={id:d.id,...d.data()};ownerMap.set(d.id,trip);repairOwnedTrip(trip)});ownerReady=true;ownerFromCache=snapshot.metadata.fromCache;renderMerged();
+  },onError);
+  tripUnsub=()=>{memberUnsub();ownerUnsub()};
 }
 
 $('#newTripBtn').onclick=()=>{
