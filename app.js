@@ -269,21 +269,78 @@ function placeGroups(items,mode){
   if(unknown.length)groups.push({label:'위치 미확인',places:unknown});
   return groups;
 }
+let googleMapsLoadPromise=null,loadedGoogleMapsKey='';
+function googleMapsApiForm(){
+  const hasKey=!!currentTrip.googleMapsApiKey;
+  modal(`<h3>이 여행방의 Google Maps API</h3><div class="field"><label>Google Maps API 키</label><input id="gmApiKey" type="password" autocomplete="off" value="${esc(currentTrip.googleMapsApiKey||'')}" placeholder="AIza..."></div><div class="card api-warning"><b>이 여행방에서만 사용됩니다</b><p class="note">이 키는 현재 여행방의 멤버만 불러올 수 있습니다. 다른 여행방에는 공유되지 않습니다. 브라우저에서 사용하는 키이므로 Google Cloud에서 웹사이트 제한을 https://hyeon-lib.github.io/Trip/* 로 설정하고, Maps JavaScript API와 Places API (New)만 허용하세요.</p></div><p id="gmApiMsg" class="note"></p><div class="row">${hasKey?'<button id="gmApiDelete" class="btn danger-btn">등록 해제</button>':'<button class="btn" data-close="1">취소</button>'}<button id="gmApiSave" class="btn primary">API 등록</button></div>`);
+  $('#gmApiSave').onclick=async()=>{
+    const key=$('#gmApiKey').value.trim(),button=$('#gmApiSave'),message=$('#gmApiMsg');
+    if(!key)return message.textContent='API 키를 입력해 주세요.';
+    try{button.disabled=true;await updateDoc(doc(db,'trips',currentTrip.id),{googleMapsApiKey:key,googleMapsApiUpdatedBy:user.uid,googleMapsApiUpdatedAt:serverTimestamp()});closeModal()}catch(e){message.textContent=`저장하지 못했습니다: ${e.message||e}`;button.disabled=false}
+  };
+  if(hasKey)$('#gmApiDelete').onclick=async()=>{if(!confirm('이 여행방의 Google Maps API 등록을 해제할까요?'))return;await updateDoc(doc(db,'trips',currentTrip.id),{googleMapsApiKey:deleteField(),googleMapsApiUpdatedBy:deleteField(),googleMapsApiUpdatedAt:deleteField()});closeModal()};
+}
+function loadGoogleMapsApi(key){
+  if(window.google?.maps){
+    if(loadedGoogleMapsKey&&loadedGoogleMapsKey!==key)return Promise.reject(Error('다른 여행방의 API가 이미 로드되어 있습니다. 페이지를 한 번 새로고침한 뒤 다시 검색해 주세요.'));
+    loadedGoogleMapsKey=key;return Promise.resolve();
+  }
+  if(googleMapsLoadPromise){
+    if(loadedGoogleMapsKey!==key)return Promise.reject(Error('다른 여행방의 API를 불러오는 중입니다. 페이지를 새로고침해 주세요.'));
+    return googleMapsLoadPromise;
+  }
+  loadedGoogleMapsKey=key;
+  googleMapsLoadPromise=new Promise((resolve,reject)=>{
+    const callback=`togetherTripMapsReady_${Date.now()}`;
+    window[callback]=()=>{delete window[callback];resolve()};
+    const script=document.createElement('script');script.src=`https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(key)}&v=weekly&libraries=places&language=ko&callback=${callback}`;script.async=true;script.onerror=()=>reject(Error('Google Maps API를 불러오지 못했습니다. 키와 웹사이트 제한을 확인해 주세요.'));document.head.appendChild(script);
+  });
+  return googleMapsLoadPromise;
+}
+function categoryFromGoogle(place){
+  const text=`${place.primaryType||''} ${place.primaryTypeDisplayName||''}`.toLowerCase();
+  if(/restaurant|food|meal|음식|식당/.test(text))return '맛집';
+  if(/cafe|coffee|카페/.test(text))return '카페';
+  if(/store|shop|mall|시장|쇼핑/.test(text))return '쇼핑';
+  if(/lodging|hotel|숙박|호텔/.test(text))return '숙소';
+  return '관광';
+}
+async function googlePlaceSearchForm(){
+  const key=currentTrip.googleMapsApiKey;if(!key)return googleMapsApiForm();
+  modal(`<h3>Google 장소 검색</h3><div class="field"><label>가게 또는 장소</label><div class="row"><input id="gmQuery" placeholder="예: 타이베이 딘타이펑"><button id="gmSearchGo" class="btn primary">검색</button></div></div><p id="gmSearchMsg" class="note">검색 결과를 선택하면 이 여행방의 추천 장소에 저장됩니다.</p><div id="gmResults" class="google-results"></div><div class="row"><button class="btn" data-close="1">닫기</button></div>`);
+  $('#gmQuery').onkeydown=e=>{if(e.key==='Enter'){$('#gmSearchGo').click();e.preventDefault()}};
+  $('#gmSearchGo').onclick=async()=>{
+    const queryText=$('#gmQuery').value.trim(),button=$('#gmSearchGo'),message=$('#gmSearchMsg'),results=$('#gmResults');
+    if(!queryText)return message.textContent='검색어를 입력해 주세요.';
+    try{
+      button.disabled=true;message.textContent='Google에서 장소를 검색하는 중입니다…';results.innerHTML='';
+      await loadGoogleMapsApi(key);
+      const {Place}=await google.maps.importLibrary('places');
+      const response=await Place.searchByText({textQuery:queryText,fields:['id','displayName','formattedAddress','location','rating','primaryType','primaryTypeDisplayName','googleMapsURI','photos'],maxResultCount:10,language:'ko'});
+      const places=response.places||[];
+      if(!places.length){message.textContent='검색 결과가 없습니다.';return}
+      message.textContent=`${places.length}개의 장소를 찾았습니다.`;
+      results.innerHTML=places.map((p,i)=>{const photo=p.photos?.[0]?.getURI?.({maxWidth:320,maxHeight:180});return `<button class="google-result" data-google-result="${i}">${photo?`<img src="${esc(photo)}" alt="">`:''}<span><b>${esc(p.displayName||'이름 없음')}</b><small>${esc(p.formattedAddress||'')}</small><small>${p.rating?`평점 ${p.rating} · `:''}${esc(p.primaryTypeDisplayName||'')}</small></span></button>`}).join('');
+      $$('[data-google-result]').forEach(b=>b.onclick=async()=>{
+        const p=places[Number(b.dataset.googleResult)],location=p.location,photo=p.photos?.[0]?.getURI?.({maxWidth:640,maxHeight:480})||'';
+        b.disabled=true;
+        await addDoc(collection(db,'trips',currentTrip.id,'places'),{name:p.displayName||'',address:p.formattedAddress||'',category:categoryFromGoogle(p),note:p.rating?`Google 평점 ${p.rating}`:'',rating:Number(p.rating||0),googlePlaceId:p.id||'',mapsUrl:p.googleMapsURI||`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(p.displayName||'')}`,photoUrl:photo,lat:location?.lat?.()??null,lng:location?.lng?.()??null,createdBy:user.uid,createdAt:serverTimestamp()});
+        closeModal();
+      });
+    }catch(e){message.textContent=e.message||'장소 검색에 실패했습니다.'}finally{button.disabled=false}
+  };
+}
 function placeCard(p){
   const safeUrl=/^https:\/\/(www\.)?google\.com\/maps|^https:\/\/maps\.app\.goo\.gl\//i.test(p.mapsUrl||'')?p.mapsUrl:`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent((p.name||'')+' '+(currentTrip.destination||''))}`;
-  return `<div class="item"><div><h4>${esc(p.name)}</h4><div class="sub">${esc(p.category||'기타')} ${p.note?'· '+esc(p.note):''}</div>${p.lat!=null?`<div class="sub">위치 ${Number(p.lat).toFixed(4)}, ${Number(p.lng).toFixed(4)}</div>`:''}</div><div class="actions"><a class="btn small" target="_blank" rel="noopener" href="${esc(safeUrl)}">Google Maps</a><button class="btn small" data-to-it="${esc(p.name)}">일정에 추가</button><button class="btn small" data-edit="places:${p.id}">수정</button><button class="btn small" data-del="places:${p.id}">삭제</button></div></div>`;
+  return `<div class="item place-item">${p.photoUrl?`<img class="place-photo" src="${esc(p.photoUrl)}" alt="">`:''}<div class="place-info"><h4>${esc(p.name)}</h4><div class="sub">${esc(p.category||'기타')} ${p.rating?`· 평점 ${fmt(p.rating)}`:''} ${p.note?'· '+esc(p.note):''}</div>${p.address?`<div class="sub">${esc(p.address)}</div>`:''}${p.lat!=null?`<div class="sub">위치 ${Number(p.lat).toFixed(4)}, ${Number(p.lng).toFixed(4)}</div>`:''}</div><div class="actions"><a class="btn small" target="_blank" rel="noopener" href="${esc(safeUrl)}">Google Maps</a><button class="btn small" data-to-it="${esc(p.name)}">일정에 추가</button><button class="btn small" data-edit="places:${p.id}">수정</button><button class="btn small" data-del="places:${p.id}">삭제</button></div></div>`;
 }
 function renderPlaces(){
   if(!currentTrip)return;
-  const saved=cache.places||[],groups=placeGroups(saved,placeViewMode);
+  const saved=cache.places||[],groups=placeGroups(saved,placeViewMode),hasApi=!!currentTrip.googleMapsApiKey;
   const groupedHtml=groups.map(group=>`<section class="place-group"><div class="section-title"><h3>${esc(group.label)}</h3><span class="pill">${group.places.length}곳</span></div><div class="list">${group.places.map(placeCard).join('')}</div></section>`).join('');
-  $('#panel-places').innerHTML=`<div class="section-title"><h2>추천 장소</h2><button id="addPlaceManual" class="btn primary">+ 장소 등록</button></div>
-    <div class="card"><p class="note">Google Maps에서 장소의 공유 링크를 복사해 등록하세요. 전체 주소 링크에는 장소명과 좌표가 자동 입력되고, 단축 링크는 장소명을 직접 입력하면 됩니다.</p><div class="actions"><button class="btn ${placeViewMode==='category'?'primary':''}" data-place-mode="category">분야별 보기</button><button class="btn ${placeViewMode==='location'?'primary':''}" data-place-mode="location">위치별 보기</button></div></div>
-    ${saved.length?groupedHtml:'<div class="empty">Google Maps 링크로 동행자와 후보 장소를 공유해보세요.</div>'}`;
-  $('#addPlaceManual').onclick=placeForm;
-  $$('[data-place-mode]').forEach(b=>b.onclick=()=>{placeViewMode=b.dataset.placeMode;renderPlaces()});
-  $$('[data-to-it]').forEach(b=>b.onclick=()=>formIt(b.dataset.toIt));
-  bindDeletes();
+  $('#panel-places').innerHTML=`<div class="section-title"><h2>추천 장소</h2><div class="actions"><button id="googleApiSettings" class="btn">${hasApi?'API 등록됨':'API 등록'}</button>${hasApi?'<button id="googlePlaceSearch" class="btn primary">Google 장소 검색</button>':''}<button id="addPlaceManual" class="btn primary">+ 링크로 등록</button></div></div><div class="card"><p class="note">${hasApi?'이 여행방에 등록된 API로 모든 방 멤버가 Google 장소를 검색할 수 있습니다.':'API를 등록하면 이 여행방 멤버만 Google 장소 검색을 함께 사용할 수 있습니다. 링크 직접 등록은 API 없이도 무료로 사용할 수 있습니다.'}</p><div class="actions"><button class="btn ${placeViewMode==='category'?'primary':''}" data-place-mode="category">분야별 보기</button><button class="btn ${placeViewMode==='location'?'primary':''}" data-place-mode="location">위치별 보기</button></div></div>${saved.length?groupedHtml:'<div class="empty">Google Maps 검색이나 공유 링크로 후보 장소를 저장해보세요.</div>'}`;
+  $('#googleApiSettings').onclick=googleMapsApiForm;if(hasApi)$('#googlePlaceSearch').onclick=googlePlaceSearchForm;$('#addPlaceManual').onclick=placeForm;
+  $$('[data-place-mode]').forEach(b=>b.onclick=()=>{placeViewMode=b.dataset.placeMode;renderPlaces()});$$('[data-to-it]').forEach(b=>b.onclick=()=>formIt(b.dataset.toIt));bindDeletes();
 }
 function placeForm(){
   modal(`<h3>Google Maps 장소 등록</h3>
