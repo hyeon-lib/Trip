@@ -41,8 +41,11 @@ async function createTrip(){
     if(!startDate||!endDate)throw new Error('여행 기간을 입력해 주세요.');
     if(endDate<startDate)throw new Error('종료일은 출발일보다 빠를 수 없습니다.');
     button.disabled=true;button.textContent='저장 중…';
-    const nick=user.displayName||user.email,ref=doc(collection(db,'trips'));
-    await setDoc(ref,{name,startDate,endDate,destination:$('#mDest').value.trim(),baseCurrency:$('#mBase').value,foreignCurrencies:[$('#mForeign').value],budget:Number($('#mBudget').value||0),ownerId:user.uid,memberIds:[user.uid],members:{[user.uid]:{nickname:nick,email:user.email,role:'owner'}},inviteCode:null,createdAt:serverTimestamp()});
+    const nick=user.displayName||user.email,ref=doc(collection(db,'trips')),roomCode=code();
+    const batch=writeBatch(db);
+    batch.set(ref,{name,startDate,endDate,destination:$('#mDest').value.trim(),baseCurrency:$('#mBase').value,foreignCurrencies:[$('#mForeign').value],budget:Number($('#mBudget').value||0),ownerId:user.uid,memberIds:[user.uid],bannedMemberIds:[],members:{[user.uid]:{nickname:nick,email:user.email,role:'owner'}},inviteCode:roomCode,createdAt:serverTimestamp()});
+    batch.set(doc(db,'invites',roomCode),{tripId:ref.id,ownerId:user.uid,createdAt:serverTimestamp(),permanent:true});
+    await batch.commit();
     closeModal();await openTrip(ref.id);
   }catch(e){
     console.error('여행 생성 실패',e);
@@ -52,7 +55,23 @@ async function createTrip(){
 }
 
 $('#joinTripBtn').onclick=()=>modal(`<h3>초대코드로 참가</h3><div class="field"><label>6자리 초대코드</label><input id="joinCode" maxlength="6" style="text-transform:uppercase"></div><div class="row"><button class="btn" data-close="1">취소</button><button id="joinGo" class="btn primary">참가하기</button></div><p id="joinMsg" class="note"></p>`);document.addEventListener('click',e=>{if(e.target.id==='joinGo')joinTrip()});
-async function joinTrip(){try{const c=$('#joinCode').value.trim().toUpperCase();const inv=await getDoc(doc(db,'invites',c));if(!inv.exists())throw new Error('초대코드를 찾을 수 없습니다.');const tr=doc(db,'trips',inv.data().tripId);await updateDoc(tr,{memberIds:arrayUnion(user.uid),[`members.${user.uid}`]:{nickname:user.displayName||user.email,email:user.email,role:'member'}});closeModal();openTrip(inv.data().tripId)}catch(e){$('#joinMsg').textContent=e.message}}
+async function joinTrip(){
+  const message=$('#joinMsg'),button=$('#joinGo');
+  try{
+    const c=$('#joinCode').value.trim().toUpperCase();
+    if(c.length!==6)throw new Error('6자리 방 코드를 입력해 주세요.');
+    button.disabled=true;button.textContent='입장 중…';
+    const inv=await getDoc(doc(db,'invites',c));
+    if(!inv.exists())throw new Error('방 코드를 찾을 수 없습니다.');
+    const tripId=inv.data().tripId,tr=doc(db,'trips',tripId);
+    await updateDoc(tr,{memberIds:arrayUnion(user.uid),[`members.${user.uid}`]:{nickname:user.displayName||user.email,email:user.email,role:'member'},updatedAt:serverTimestamp(),updatedBy:user.uid});
+    closeModal();await openTrip(tripId);
+  }catch(e){
+    console.error('방 입장 실패',e);
+    message.textContent=e.code==='permission-denied'?'이 방에 입장할 권한이 없습니다. 방장에게 강퇴 여부를 확인해 주세요.':e.message;
+    if(button){button.disabled=false;button.textContent='참가하기';}
+  }
+}
 
 async function openTrip(id){cleanupSub();const snap=await getDoc(doc(db,'trips',id));if(!snap.exists())return;currentTrip={id,...snap.data()};$('#homeView').classList.add('hidden');$('#tripView').classList.remove('hidden');renderHeader();renderTabs();listenTripDoc();listenSubs()}
 function showHome(){cleanupSub();$('#tripView').classList.add('hidden');$('#homeView').classList.remove('hidden');currentTrip=null}
@@ -97,15 +116,16 @@ function renderMemos(){const a=cache.memos||[];$('#panel-memos').innerHTML=`<div
 function simpleAdd(sub,title,label,key){modal(`<h3>${title}</h3><div class="field"><label>${label}</label><input id="simpleVal"></div><div class="row"><button class="btn" data-close="1">취소</button><button id="simpleSave" class="btn primary">저장</button></div>`);setTimeout(()=>$('#simpleSave').onclick=async()=>{await addDoc(collection(db,'trips',currentTrip.id,sub),{[key]:$('#simpleVal').value.trim(),done:false,createdBy:user.uid,createdAt:serverTimestamp()});closeModal()},0)}
 async function issueInviteCode(){
   if(!currentTrip||currentTrip.ownerId!==user.uid)return;
-  const oldCode=currentTrip.inviteCode||null;
-  const newCode=code();
-  const b=writeBatch(db);
-  if(oldCode)b.delete(doc(db,'invites',oldCode));
-  b.set(doc(db,'invites',newCode),{tripId:currentTrip.id,ownerId:user.uid,createdAt:serverTimestamp()});
-  b.update(doc(db,'trips',currentTrip.id),{inviteCode:newCode});
-  await b.commit();
-  await navigator.clipboard?.writeText(newCode).catch(()=>{});
-  alert(`새 초대코드 ${newCode}가 발급되었습니다.${oldCode?' 이전 코드는 더 이상 사용할 수 없습니다.':''}`);
+  if(currentTrip.inviteCode){
+    await navigator.clipboard?.writeText(currentTrip.inviteCode).catch(()=>{});
+    return alert(`이 방의 고정 코드는 ${currentTrip.inviteCode}입니다.`);
+  }
+  const roomCode=code(),batch=writeBatch(db);
+  batch.set(doc(db,'invites',roomCode),{tripId:currentTrip.id,ownerId:user.uid,createdAt:serverTimestamp(),permanent:true});
+  batch.update(doc(db,'trips',currentTrip.id),{inviteCode:roomCode,bannedMemberIds:currentTrip.bannedMemberIds||[]});
+  await batch.commit();
+  await navigator.clipboard?.writeText(roomCode).catch(()=>{});
+  alert(`이 방의 고정 코드 ${roomCode}가 발급되었습니다. 코드는 변경되지 않습니다.`);
 }
 async function removeMember(uid){
   if(!currentTrip||currentTrip.ownerId!==user.uid||uid===user.uid)return;
@@ -113,7 +133,7 @@ async function removeMember(uid){
   if(!member)return;
   if(!confirm(`${member.nickname||member.email}님을 이 여행에서 내보낼까요? 해당 사용자는 즉시 여행 데이터에 접근할 수 없게 됩니다.`))return;
   try{
-    await updateDoc(doc(db,'trips',currentTrip.id),{memberIds:arrayRemove(uid),[`members.${uid}`]:deleteField(),updatedAt:serverTimestamp(),updatedBy:user.uid});
+    await updateDoc(doc(db,'trips',currentTrip.id),{memberIds:arrayRemove(uid),bannedMemberIds:arrayUnion(uid),[`members.${uid}`]:deleteField(),updatedAt:serverTimestamp(),updatedBy:user.uid});
   }catch(e){alert(`내보내지 못했습니다: ${e.message||e}`);}
 }
 async function leaveTrip(){
@@ -131,9 +151,9 @@ async function leaveTrip(){
 }
 function renderMembers(){
   const owner=currentTrip.ownerId===user.uid;
-  const inviteCard=owner?`<div class="card"><b>여행 입장 코드</b><p class="big">${currentTrip.inviteCode?esc(currentTrip.inviteCode):'아직 발급하지 않음'}</p><p class="note">방장만 코드를 발급할 수 있습니다. 동행자는 로그인 후 홈의 “초대코드 참가”에서 이 코드를 입력해야 여행방에 들어올 수 있습니다. 새 코드를 발급하면 이전 코드는 즉시 폐기됩니다.</p><div class="actions"><button id="issueInviteBtn" class="btn primary">${currentTrip.inviteCode?'새 코드 재발급':'초대코드 발급'}</button>${currentTrip.inviteCode?'<button id="memberCopyInvite" class="btn">코드 복사</button>':''}</div></div>`:`<div class="card"><b>초대는 방장이 관리합니다</b><p class="note">현재 여행에 이미 참여 중입니다. 새로운 동행자에게 입장 코드를 전달해야 한다면 방장에게 요청하세요.</p></div>`;
+  const inviteCard=owner?`<div class="card"><b>여행 고정 입장 코드</b><p class="big">${currentTrip.inviteCode?esc(currentTrip.inviteCode):'아직 발급하지 않음'}</p><p class="note">이 코드는 해당 여행방에서 계속 유지됩니다. 로그인한 동행자가 홈의 “초대코드 참가”에 입력하면 언제든 이 방에 들어올 수 있습니다.</p><div class="actions">${currentTrip.inviteCode?'<button id="memberCopyInvite" class="btn primary">고정 코드 복사</button>':'<button id="issueInviteBtn" class="btn primary">고정 코드 발급</button>'}</div></div>`:`<div class="card"><b>초대는 방장이 관리합니다</b><p class="note">현재 여행에 이미 참여 중입니다. 새로운 동행자에게 입장 코드를 전달해야 한다면 방장에게 요청하세요.</p></div>`;
   const members=Object.entries(currentTrip.members||{}).map(([uid,m])=>`<div class="item"><div><h4>${esc(m.nickname||m.email)}</h4><div class="sub">${esc(m.email||'')} · ${m.role==='owner'?'방장':'동행자'}</div></div><div class="actions">${uid===user.uid?'<span class="pill">나</span>':''}${owner&&uid!==user.uid?`<button class="btn small danger-btn" data-remove-member="${uid}">내보내기</button>`:''}</div></div>`).join('');
-  const leaveCard=!owner?`<div class="card leave-card"><b>여행에서 나가기</b><p class="note">탈퇴하면 이 여행의 일정과 지출을 더 이상 볼 수 없습니다. 다시 참여하려면 새 초대코드가 필요합니다.</p><button id="leaveTripBtn" class="btn danger-btn">여행 탈퇴</button></div>`:`<div class="card"><b>방장은 탈퇴할 수 없습니다</b><p class="note">여행을 떠나려면 먼저 다른 동행자에게 방장 권한을 이전해야 합니다.</p></div>`;
+  const leaveCard=!owner?`<div class="card leave-card"><b>여행에서 나가기</b><p class="note">탈퇴하면 이 여행의 일정과 지출을 더 이상 볼 수 없습니다. 자발적으로 나간 뒤에는 기존 고정 코드로 다시 참여할 수 있습니다.</p><button id="leaveTripBtn" class="btn danger-btn">여행 탈퇴</button></div>`:`<div class="card"><b>방장은 탈퇴할 수 없습니다</b><p class="note">여행을 떠나려면 먼저 다른 동행자에게 방장 권한을 이전해야 합니다.</p></div>`;
   $('#panel-members').innerHTML=`<div class="section-title"><h2>동행자</h2></div>${inviteCard}<div class="section-title"><h2>${currentTrip.memberIds?.length||1}명 참여 중</h2></div><div class="list">${members}</div><div class="section-title"><h2>참여 관리</h2></div>${leaveCard}`;
   if(owner){
     const issue=$('#issueInviteBtn');if(issue)issue.onclick=issueInviteCode;
