@@ -6,6 +6,7 @@ import { getFirestore, collection, doc, addDoc, setDoc, getDoc, updateDoc, delet
 const app = initializeApp(firebaseConfig); const auth = getAuth(app); const db = getFirestore(app);
 const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)];
 let user=null,currentTrip=null,tripUnsub=null,subUnsubs=[],cache={};
+let placeViewMode='category';
 const tabs=[['overview','홈'],['itinerary','일정'],['places','추천 장소'],['weather','날씨'],['flights','항공'],['stays','숙소'],['money','지출·정산'],['exchange','환전'],['packing','준비물'],['memos','메모'],['members','동행자']];
 const curNames={KRW:'₩',JPY:'¥',USD:'$',EUR:'€',GBP:'£',CNY:'¥',TWD:'NT$',THB:'฿',VND:'₫',SGD:'S$',AUD:'A$',CHF:'CHF'};
 const fallbackCurrencies=['KRW','USD','JPY','EUR','CNY','HKD','TWD','THB','VND','PHP','SGD','MYR','IDR','AUD','NZD','CAD','GBP','CHF','AED','SAR','TRY','INR','MXN','BRL','ZAR'];
@@ -96,8 +97,89 @@ function renderItinerary(){
 }
 function formIt(place=''){modal(`<h3>일정 추가</h3><div class="row"><div class="field"><label>날짜</label><select id="fDate">${days().map(d=>`<option>${d}</option>`).join('')}</select></div><div class="field"><label>시간</label><input id="fTime" type="time"></div></div><div class="field"><label>일정명</label><input id="fTitle" placeholder="아사쿠사 산책"></div><div class="field"><label>장소</label><input id="fPlace" value="${esc(place)}"></div><div class="field"><label>메모</label><textarea id="fNote"></textarea></div><div class="row"><button class="btn" data-close="1">취소</button><button id="saveIt" class="btn primary">저장</button></div>`);setTimeout(()=>$('#saveIt').onclick=async()=>{await addDoc(collection(db,'trips',currentTrip.id,'itinerary'),{date:$('#fDate').value,time:$('#fTime').value,title:$('#fTitle').value.trim(),place:$('#fPlace').value.trim(),note:$('#fNote').value.trim(),createdBy:user.uid,createdAt:serverTimestamp()});closeModal()},0)}
 
-function renderPlaces(){if(!currentTrip)return;const saved=cache.places||[];$('#panel-places').innerHTML=`<div class="section-title"><h2>추천 장소</h2></div><div class="card"><div class="field"><label>여행지에서 찾기</label><div class="row"><input id="placeQ" placeholder="예: 도쿄 야경, 오사카 라멘"><button id="searchPlace" class="btn primary">검색</button></div></div><p class="note">Google Maps 검색으로 연결하고, 마음에 드는 장소는 아래에 저장해 공동 후보로 관리할 수 있습니다.</p><div id="placeSearchResult"></div></div><div class="section-title"><h2>우리의 후보 장소</h2><button id="addPlaceManual" class="btn">+ 직접 저장</button></div><div class="list">${saved.length?saved.map(p=>`<div class="item"><div><h4>${esc(p.name)}</h4><div class="sub">${esc(p.category||'')} ${p.note?'· '+esc(p.note):''}</div></div><div class="actions"><button class="btn small" data-to-it="${esc(p.name)}">일정에 추가</button><button class="btn small" data-edit="places:${p.id}">수정</button><button class="btn small" data-del="places:${p.id}">삭제</button></div></div>`).join(''):'<div class="empty">동행자와 가고 싶은 장소를 저장해보세요.</div>'}</div>`;$('#searchPlace').onclick=()=>{const q=$('#placeQ').value.trim();if(!q)return;const url=`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(q+' '+(currentTrip.destination||''))}`;$('#placeSearchResult').innerHTML=`<p><a class="btn" target="_blank" rel="noopener" href="${url}">Google Maps에서 “${esc(q)}” 검색 열기 ↗</a></p>`};$('#addPlaceManual').onclick=()=>placeForm();$$('[data-to-it]').forEach(b=>b.onclick=()=>formIt(b.dataset.toIt));bindDeletes()}
-function placeForm(){modal(`<h3>추천 장소 저장</h3><div class="field"><label>장소명</label><input id="pName"></div><div class="field"><label>분류</label><select id="pCat"><option>관광</option><option>맛집</option><option>카페</option><option>쇼핑</option><option>야경</option><option>기타</option></select></div><div class="field"><label>메모</label><textarea id="pNote"></textarea></div><div class="row"><button class="btn" data-close="1">취소</button><button id="pSave" class="btn primary">저장</button></div>`);setTimeout(()=>$('#pSave').onclick=async()=>{await addDoc(collection(db,'trips',currentTrip.id,'places'),{name:$('#pName').value.trim(),category:$('#pCat').value,note:$('#pNote').value.trim(),createdBy:user.uid,createdAt:serverTimestamp()});closeModal()},0)}
+function parseGoogleMapsLink(value){
+  const raw=String(value||'').trim();
+  if(!raw)return {url:'',name:'',lat:null,lng:null,short:false};
+  try{
+    const url=new URL(raw),host=url.hostname.toLowerCase();
+    if(!['google.com','www.google.com','maps.google.com','maps.app.goo.gl'].some(x=>host===x||host.endsWith('.'+x)))throw Error('Google Maps 링크만 사용할 수 있습니다.');
+    const result={url:url.href,name:'',lat:null,lng:null,short:host==='maps.app.goo.gl'};
+    const nameMatch=decodeURIComponent(url.pathname).match(/\/place\/([^/]+)/);
+    if(nameMatch)result.name=nameMatch[1].replace(/\+/g,' ').trim();
+    const atMatch=url.href.match(/@(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?)/);
+    const dataMatch=url.href.match(/!3d(-?\d+(?:\.\d+)?).*?!4d(-?\d+(?:\.\d+)?)/);
+    if(atMatch){result.lat=Number(atMatch[1]);result.lng=Number(atMatch[2]);}
+    else if(dataMatch){result.lat=Number(dataMatch[1]);result.lng=Number(dataMatch[2]);}
+    const query=url.searchParams.get('query')||url.searchParams.get('q');
+    if(!result.name&&query&&!/^-?\d+(\.\d+)?\s*,/.test(query))result.name=query;
+    return result;
+  }catch(e){return {url:raw,name:'',lat:null,lng:null,short:false,error:e.message||'올바른 링크가 아닙니다.'};}
+}
+function bindPlaceLinkInput(prefix){
+  const urlInput=$('#'+prefix+'Url'),nameInput=$('#'+prefix+'Name'),latInput=$('#'+prefix+'Lat'),lngInput=$('#'+prefix+'Lng'),message=$('#'+prefix+'LinkMsg');
+  if(!urlInput)return;
+  const parse=()=>{
+    const parsed=parseGoogleMapsLink(urlInput.value);
+    if(parsed.error){message.textContent=parsed.error;return;}
+    if(parsed.name&&!nameInput.value.trim())nameInput.value=parsed.name;
+    if(parsed.lat!=null){latInput.value=parsed.lat;lngInput.value=parsed.lng;}
+    message.textContent=parsed.short?'단축 링크는 장소 정보를 읽을 수 없어 장소명을 직접 입력해야 합니다. 링크는 정상적으로 저장됩니다.':parsed.name||parsed.lat!=null?'링크에서 장소 정보를 자동으로 채웠습니다.':'장소명을 확인해 주세요. 링크는 그대로 저장됩니다.';
+  };
+  urlInput.addEventListener('input',()=>setTimeout(parse,0));parse();
+}
+function placeDistanceKm(a,b){
+  const rad=n=>n*Math.PI/180,dLat=rad(Number(b.lat)-Number(a.lat)),dLng=rad(Number(b.lng)-Number(a.lng)),lat1=rad(Number(a.lat)),lat2=rad(Number(b.lat));
+  return 6371*2*Math.asin(Math.sqrt(Math.sin(dLat/2)**2+Math.cos(lat1)*Math.cos(lat2)*Math.sin(dLng/2)**2));
+}
+function placeGroups(items,mode){
+  if(mode==='category'){
+    const map=new Map();items.forEach(p=>{const key=p.category||'기타';if(!map.has(key))map.set(key,[]);map.get(key).push(p)});
+    return [...map].map(([label,places])=>({label,places}));
+  }
+  const groups=[],unknown=[];
+  items.forEach(place=>{
+    if(!Number.isFinite(Number(place.lat))||!Number.isFinite(Number(place.lng))){unknown.push(place);return;}
+    let group=groups.find(g=>g.places.some(existing=>placeDistanceKm(existing,place)<=2.5));
+    if(!group){group={label:(place.name||'장소')+' 주변',places:[]};groups.push(group);}
+    group.places.push(place);
+  });
+  if(unknown.length)groups.push({label:'위치 미확인',places:unknown});
+  return groups;
+}
+function placeCard(p){
+  const safeUrl=/^https:\/\/(www\.)?google\.com\/maps|^https:\/\/maps\.app\.goo\.gl\//i.test(p.mapsUrl||'')?p.mapsUrl:`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent((p.name||'')+' '+(currentTrip.destination||''))}`;
+  return `<div class="item"><div><h4>${esc(p.name)}</h4><div class="sub">${esc(p.category||'기타')} ${p.note?'· '+esc(p.note):''}</div>${p.lat!=null?`<div class="sub">위치 ${Number(p.lat).toFixed(4)}, ${Number(p.lng).toFixed(4)}</div>`:''}</div><div class="actions"><a class="btn small" target="_blank" rel="noopener" href="${esc(safeUrl)}">Google Maps</a><button class="btn small" data-to-it="${esc(p.name)}">일정에 추가</button><button class="btn small" data-edit="places:${p.id}">수정</button><button class="btn small" data-del="places:${p.id}">삭제</button></div></div>`;
+}
+function renderPlaces(){
+  if(!currentTrip)return;
+  const saved=cache.places||[],groups=placeGroups(saved,placeViewMode);
+  const groupedHtml=groups.map(group=>`<section class="place-group"><div class="section-title"><h3>${esc(group.label)}</h3><span class="pill">${group.places.length}곳</span></div><div class="list">${group.places.map(placeCard).join('')}</div></section>`).join('');
+  $('#panel-places').innerHTML=`<div class="section-title"><h2>추천 장소</h2><button id="addPlaceManual" class="btn primary">+ 장소 등록</button></div>
+    <div class="card"><p class="note">Google Maps에서 장소의 공유 링크를 복사해 등록하세요. 전체 주소 링크에는 장소명과 좌표가 자동 입력되고, 단축 링크는 장소명을 직접 입력하면 됩니다.</p><div class="actions"><button class="btn ${placeViewMode==='category'?'primary':''}" data-place-mode="category">분야별 보기</button><button class="btn ${placeViewMode==='location'?'primary':''}" data-place-mode="location">위치별 보기</button></div></div>
+    ${saved.length?groupedHtml:'<div class="empty">Google Maps 링크로 동행자와 후보 장소를 공유해보세요.</div>'}`;
+  $('#addPlaceManual').onclick=placeForm;
+  $$('[data-place-mode]').forEach(b=>b.onclick=()=>{placeViewMode=b.dataset.placeMode;renderPlaces()});
+  $$('[data-to-it]').forEach(b=>b.onclick=()=>formIt(b.dataset.toIt));
+  bindDeletes();
+}
+function placeForm(){
+  modal(`<h3>Google Maps 장소 등록</h3>
+    <div class="field"><label>Google Maps 공유 링크</label><input id="pUrl" type="url" placeholder="https://www.google.com/maps/place/... 또는 https://maps.app.goo.gl/..."><p id="pLinkMsg" class="note">링크를 붙여 넣으면 가능한 정보를 자동으로 채웁니다.</p></div>
+    <input id="pLat" type="hidden"><input id="pLng" type="hidden">
+    <div class="field"><label>장소명</label><input id="pName" placeholder="링크에서 자동 입력 또는 직접 입력"></div>
+    <div class="field"><label>분류</label><select id="pCat"><option>관광</option><option>맛집</option><option>카페</option><option>쇼핑</option><option>야경</option><option>숙소</option><option>기타</option></select></div>
+    <div class="field"><label>메모</label><textarea id="pNote"></textarea></div>
+    <div class="row"><button class="btn" data-close="1">취소</button><button id="pSave" class="btn primary">저장</button></div>`);
+  bindPlaceLinkInput('p');
+  $('#pSave').onclick=async()=>{
+    const name=$('#pName').value.trim(),mapsUrl=$('#pUrl').value.trim();
+    if(!name)return alert('장소명을 입력해 주세요.');
+    if(!mapsUrl)return alert('Google Maps 링크를 입력해 주세요.');
+    const lat=$('#pLat').value,lng=$('#pLng').value;
+    await addDoc(collection(db,'trips',currentTrip.id,'places'),{name,category:$('#pCat').value,note:$('#pNote').value.trim(),mapsUrl,lat:lat===''?null:Number(lat),lng:lng===''?null:Number(lng),createdBy:user.uid,createdAt:serverTimestamp()});
+    closeModal();
+  };
+}
 
 async function loadWeather(){
   const box=$('#panel-weather');
@@ -259,7 +341,7 @@ function editRecord(sub,id){
   if(!item)return alert('수정할 항목을 찾지 못했습니다.');
   let body='';
   if(sub==='itinerary')body=`<div class="row"><div class="field"><label>날짜</label><select id="edDate">${days().map(d=>`<option ${selected(d,item.date)}>${d}</option>`).join('')}</select></div><div class="field"><label>시간</label><input id="edTime" type="time" value="${esc(item.time||'')}"></div></div><div class="field"><label>일정명</label><input id="edTitle" value="${esc(item.title||'')}"></div><div class="field"><label>장소</label><input id="edPlace" value="${esc(item.place||'')}"></div><div class="field"><label>메모</label><textarea id="edNote">${esc(item.note||'')}</textarea></div>`;
-  if(sub==='places')body=`<div class="field"><label>장소명</label><input id="edName" value="${esc(item.name||'')}"></div><div class="field"><label>분류</label><select id="edCategory">${['관광','맛집','카페','쇼핑','야경','기타'].map(v=>`<option ${selected(v,item.category)}>${v}</option>`).join('')}</select></div><div class="field"><label>메모</label><textarea id="edNote">${esc(item.note||'')}</textarea></div>`;
+  if(sub==='places')body=`<div class="field"><label>Google Maps 공유 링크</label><input id="edUrl" value="${esc(item.mapsUrl||'')}"><p id="edLinkMsg" class="note"></p></div><input id="edLat" type="hidden" value="${item.lat??''}"><input id="edLng" type="hidden" value="${item.lng??''}"><div class="field"><label>장소명</label><input id="edName" value="${esc(item.name||'')}"></div><div class="field"><label>분류</label><select id="edCategory">${['관광','맛집','카페','쇼핑','야경','숙소','기타'].map(v=>`<option ${selected(v,item.category)}>${v}</option>`).join('')}</select></div><div class="field"><label>메모</label><textarea id="edNote">${esc(item.note||'')}</textarea></div>`;
   if(sub==='flights')body=`<div class="row"><div class="field"><label>항공사</label><input id="edAirline" value="${esc(item.airline||'')}"></div><div class="field"><label>편명</label><input id="edFlightNo" value="${esc(item.flightNo||'')}"></div></div><div class="field"><label>날짜</label><input id="edDate" type="date" value="${esc(item.date||'')}"></div><div class="row"><div class="field"><label>출발지</label><input id="edFrom" value="${esc(item.from||'')}"></div><div class="field"><label>출발시간</label><input id="edDepart" type="time" value="${esc(item.depart||'')}"></div></div><div class="row"><div class="field"><label>도착지</label><input id="edTo" value="${esc(item.to||'')}"></div><div class="field"><label>도착시간</label><input id="edArrive" type="time" value="${esc(item.arrive||'')}"></div></div><div class="field"><label>예약번호</label><input id="edBooking" value="${esc(item.booking||'')}"></div>`;
   if(sub==='stays')body=`<div class="field"><label>숙소명</label><input id="edName" value="${esc(item.name||'')}"></div><div class="row"><div class="field"><label>체크인</label><input id="edCheckin" type="date" value="${esc(item.checkin||'')}"></div><div class="field"><label>체크아웃</label><input id="edCheckout" type="date" value="${esc(item.checkout||'')}"></div></div><div class="field"><label>주소</label><input id="edAddress" value="${esc(item.address||'')}"></div><div class="field"><label>예약번호</label><input id="edBooking" value="${esc(item.booking||'')}"></div>`;
   if(sub==='expenses')body=`<div class="field"><label>내용</label><input id="edTitle" value="${esc(item.title||'')}"></div><div class="row"><div class="field"><label>금액</label><input id="edAmount" type="number" value="${Number(item.originalAmount||0)}"></div><div class="field"><label>통화</label><select id="edCurrency">${currencyOptions(item.currency)}</select></div></div><div class="field"><label>수동 환율 (선택)</label><input id="edManualRate" type="number" min="0" step="any" value="${item.fxSource==='manual'?Number(item.fxRate||0):''}" placeholder="환전 기록이 없을 때 입력"></div><div class="row"><div class="field"><label>비용 유형</label><select id="edType"><option value="shared" ${selected('shared',item.type)}>공동비용</option><option value="personal" ${selected('personal',item.type)}>개인비용</option></select></div><div class="field"><label>실제 결제자</label><select id="edPayer">${memberOptions(item.payerUid)}</select></div></div><div class="field"><label>개인비용 사용자</label><select id="edPersonal">${memberOptions(item.personalUid)}</select></div><p id="editMsg" class="note"></p>`;
@@ -267,12 +349,13 @@ function editRecord(sub,id){
   if(sub==='packing')body=`<div class="field"><label>준비물</label><input id="edText" value="${esc(item.text||'')}"></div>`;
   if(sub==='memos')body=`<div class="field"><label>제목</label><input id="edTitle" value="${esc(item.title||'')}"></div><div class="field"><label>내용</label><textarea id="edText">${esc(item.text||'')}</textarea></div>`;
   modal(`<h3>항목 수정</h3>${body}<div class="row"><button class="btn" data-close="1">취소</button><button id="editSave" class="btn primary">수정 저장</button></div>`);
+  if(sub==='places')bindPlaceLinkInput('ed');
   $('#editSave').onclick=async()=>{
     const button=$('#editSave');button.disabled=true;
     try{
       let data={updatedAt:serverTimestamp(),updatedBy:user.uid};
       if(sub==='itinerary')Object.assign(data,{date:$('#edDate').value,time:$('#edTime').value,title:$('#edTitle').value.trim(),place:$('#edPlace').value.trim(),note:$('#edNote').value.trim()});
-      if(sub==='places')Object.assign(data,{name:$('#edName').value.trim(),category:$('#edCategory').value,note:$('#edNote').value.trim()});
+      if(sub==='places')Object.assign(data,{name:$('#edName').value.trim(),category:$('#edCategory').value,note:$('#edNote').value.trim(),mapsUrl:$('#edUrl').value.trim(),lat:$('#edLat').value===''?null:Number($('#edLat').value),lng:$('#edLng').value===''?null:Number($('#edLng').value)});
       if(sub==='flights')Object.assign(data,{airline:$('#edAirline').value.trim(),flightNo:$('#edFlightNo').value.trim(),date:$('#edDate').value,from:$('#edFrom').value.trim(),depart:$('#edDepart').value,to:$('#edTo').value.trim(),arrive:$('#edArrive').value,booking:$('#edBooking').value.trim()});
       if(sub==='stays')Object.assign(data,{name:$('#edName').value.trim(),checkin:$('#edCheckin').value,checkout:$('#edCheckout').value,address:$('#edAddress').value.trim(),booking:$('#edBooking').value.trim()});
       if(sub==='expenses'){const amount=Number($('#edAmount').value),currency=$('#edCurrency').value,converted=await fxToBase(currency,amount,Number($('#edManualRate').value||0));Object.assign(data,{title:$('#edTitle').value.trim(),originalAmount:amount,currency,baseAmount:converted.base,fxRate:converted.rate,fxSource:converted.source,type:$('#edType').value,payerUid:$('#edPayer').value,personalUid:$('#edType').value==='personal'?$('#edPersonal').value:null});}
