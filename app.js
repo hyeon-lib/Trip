@@ -13,13 +13,42 @@ try{
 }
 const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)];
 let user=null,currentTrip=null,tripUnsub=null,subUnsubs=[],cache={};
-let placeViewMode='category';
+let placeViewMode='category',exchangeCurrency='';
 const tabs=[['overview','홈'],['itinerary','일정'],['places','추천 장소'],['weather','날씨'],['flights','항공'],['stays','숙소'],['money','지출·정산'],['exchange','환전'],['packing','준비물'],['memos','메모'],['members','동행자']];
 const curNames={KRW:'₩',JPY:'¥',USD:'$',EUR:'€',GBP:'£',CNY:'¥',TWD:'NT$',THB:'฿',VND:'₫',SGD:'S$',AUD:'A$',CHF:'CHF'};
 const fallbackCurrencies=['KRW','USD','JPY','EUR','CNY','HKD','TWD','THB','VND','PHP','SGD','MYR','IDR','AUD','NZD','CAD','GBP','CHF','AED','SAR','TRY','INR','MXN','BRL','ZAR'];
 const currencyCodes=(()=>{try{return Intl.supportedValuesOf('currency')}catch{return fallbackCurrencies}})();
 const currencyDisplay=(()=>{try{return new Intl.DisplayNames(['ko'],{type:'currency'})}catch{return null}})();
 const currencyOptions=(selected)=>currencyCodes.map(c=>`<option value="${c}" ${c===selected?'selected':''}>${c} · ${currencyDisplay?.of(c)||c}</option>`).join('');
+const countryCurrencyMap=[
+  ['KR','대한민국','KRW'],['JP','일본','JPY'],['TW','대만','TWD'],['CN','중국','CNY'],['HK','홍콩','HKD'],['MO','마카오','MOP'],
+  ['TH','태국','THB'],['VN','베트남','VND'],['PH','필리핀','PHP'],['SG','싱가포르','SGD'],['MY','말레이시아','MYR'],['ID','인도네시아','IDR'],
+  ['LA','라오스','LAK'],['KH','캄보디아','KHR'],['IN','인도','INR'],['NP','네팔','NPR'],['LK','스리랑카','LKR'],['MV','몰디브','MVR'],
+  ['AE','아랍에미리트','AED'],['SA','사우디아라비아','SAR'],['QA','카타르','QAR'],['TR','튀르키예','TRY'],['IL','이스라엘','ILS'],
+  ['US','미국','USD'],['CA','캐나다','CAD'],['MX','멕시코','MXN'],['BR','브라질','BRL'],['AR','아르헨티나','ARS'],['CL','칠레','CLP'],['PE','페루','PEN'],['CO','콜롬비아','COP'],
+  ['GB','영국','GBP'],['FR','프랑스','EUR'],['DE','독일','EUR'],['IT','이탈리아','EUR'],['ES','스페인','EUR'],['PT','포르투갈','EUR'],['NL','네덜란드','EUR'],
+  ['BE','벨기에','EUR'],['AT','오스트리아','EUR'],['IE','아일랜드','EUR'],['FI','핀란드','EUR'],['GR','그리스','EUR'],['HR','크로아티아','EUR'],
+  ['CH','스위스','CHF'],['CZ','체코','CZK'],['PL','폴란드','PLN'],['HU','헝가리','HUF'],['DK','덴마크','DKK'],['NO','노르웨이','NOK'],['SE','스웨덴','SEK'],['IS','아이슬란드','ISK'],['RO','루마니아','RON'],['BG','불가리아','BGN'],
+  ['AU','호주','AUD'],['NZ','뉴질랜드','NZD'],['MA','모로코','MAD'],['EG','이집트','EGP'],['ZA','남아프리카공화국','ZAR'],['KE','케냐','KES'],['TZ','탄자니아','TZS']
+];
+const countryByCode=code=>countryCurrencyMap.find(x=>x[0]===code);
+const tripCountries=trip=>Array.isArray(trip?.countries)?trip.countries:[];
+const tripForeignCurrencies=trip=>{
+  const fromCountries=tripCountries(trip).map(x=>x.currency||countryByCode(x.code)?.[2]).filter(Boolean);
+  const legacy=Array.isArray(trip?.foreignCurrencies)?trip.foreignCurrencies:[];
+  return [...new Set([...fromCountries,...legacy])].filter(x=>x&&x!==trip?.baseCurrency);
+};
+const limitedCurrencyOptions=(selected,trip=currentTrip)=>[...new Set([trip?.baseCurrency||'KRW',...tripForeignCurrencies(trip)])].map(c=>`<option value="${c}" ${c===selected?'selected':''}>${c} · ${currencyDisplay?.of(c)||c}</option>`).join('');
+function countrySelectHtml(selected=''){return `<select class="country-select"><option value="">국가 선택</option>${countryCurrencyMap.map(([code,name,currency])=>`<option value="${code}" ${code===selected?'selected':''}>${name} · ${currency}</option>`).join('')}</select><button type="button" class="btn small country-remove" aria-label="국가 삭제">삭제</button>`}
+function bindCountryEditor(containerId,addId,selectedCodes=[]){
+  const container=$(`#${containerId}`),add=$(`#${addId}`);
+  const append=selected=>{const row=document.createElement('div');row.className='country-row';row.innerHTML=countrySelectHtml(selected);row.querySelector('.country-remove').onclick=()=>row.remove();container.appendChild(row)};
+  selectedCodes.filter(Boolean).forEach(append);
+  add.onclick=()=>append('');
+}
+function readCountries(containerId){
+  return [...$(`#${containerId}`).querySelectorAll('.country-select')].map(x=>countryByCode(x.value)).filter(Boolean).filter((x,i,a)=>a.findIndex(y=>y[0]===x[0])===i).map(([code,name,currency])=>({code,name,currency}));
+}
 const esc=s=>String(s??'').replace(/[&<>'"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));
 const fmt=n=>Number(n||0).toLocaleString('ko-KR',{maximumFractionDigits:2}); const money=(n,c='KRW')=>`${curNames[c]||c} ${fmt(n)}`;
 const code=()=>Math.random().toString(36).slice(2,8).toUpperCase();
@@ -100,24 +129,24 @@ function listenTrips(){
 }
 
 $('#newTripBtn').onclick=()=>{
-  modal(`<h3>새 여행 만들기</h3><div class="field"><label>여행 이름</label><input id="mName" placeholder="2026 도쿄 여행"></div><div class="row"><div class="field"><label>출발일</label><input id="mStart" type="date"></div><div class="field"><label>종료일</label><input id="mEnd" type="date"></div></div><div class="field"><label>대표 여행지</label><input id="mDest" placeholder="Tokyo, Japan"></div><div class="row"><div class="field"><label>기준 통화</label><select id="mBase">${currencyOptions('KRW')}</select></div><div class="field"><label>현지 통화</label><select id="mForeign">${currencyOptions('JPY')}</select></div></div><div class="field"><label>총 여행 예산(기준 통화)</label><input id="mBudget" type="number" value="0"></div><div class="row"><button class="btn" data-close="1">취소</button><button id="createTrip" class="btn primary">만들기</button></div><p id="createTripMsg" class="note"></p>`);
-  setTimeout(()=>$('#createTrip').onclick=createTrip,0);
+  modal(`<h3>새 여행 만들기</h3><div class="field"><label>여행 이름</label><input id="mName" placeholder="2027 대만 여행"></div><div class="row"><div class="field"><label>출발일</label><input id="mStart" type="date"></div><div class="field"><label>종료일</label><input id="mEnd" type="date"></div></div><div class="field"><label>대표 여행지</label><input id="mDest" placeholder="타이베이"></div><div class="field"><label>여행 국가 (선택)</label><div id="mCountries" class="country-list"></div><button id="mAddCountry" type="button" class="btn country-add">+ 국가 추가</button><p class="note">여러 국가라면 +를 눌러 하나씩 추가하세요. 정하지 않아도 여행을 만들 수 있습니다.</p></div><div class="field"><label>기준 통화</label><select id="mBase">${currencyOptions('KRW')}</select></div><div class="field"><label>총 여행 예산(기준 통화)</label><input id="mBudget" type="number" value="0"></div><div class="row"><button class="btn" data-close="1">취소</button><button id="createTrip" class="btn primary">만들기</button></div><p id="createTripMsg" class="note"></p>`);
+  bindCountryEditor('mCountries','mAddCountry',[]);
+  $('#createTrip').onclick=createTrip;
 };
 async function createTrip(){
   const button=$('#createTrip'),message=$('#createTripMsg');
   try{
     if(!user)throw new Error('로그인 세션이 만료되었습니다. 다시 로그인해 주세요.');
-    const name=$('#mName').value.trim(),startDate=$('#mStart').value,endDate=$('#mEnd').value;
+    const name=$('#mName').value.trim(),startDate=$('#mStart').value,endDate=$('#mEnd').value,countries=readCountries('mCountries');
     if(!name)throw new Error('여행 이름을 입력해 주세요.');
     if(!startDate||!endDate)throw new Error('여행 기간을 입력해 주세요.');
     if(endDate<startDate)throw new Error('종료일은 출발일보다 빠를 수 없습니다.');
     button.disabled=true;button.textContent='저장 중…';
     const nick=user.displayName||user.email,ref=doc(collection(db,'trips')),roomCode=code();
     const batch=writeBatch(db);
-    batch.set(ref,{name,startDate,endDate,destination:$('#mDest').value.trim(),baseCurrency:$('#mBase').value,foreignCurrencies:[$('#mForeign').value],budget:Number($('#mBudget').value||0),ownerId:user.uid,memberIds:[user.uid],bannedMemberIds:[],members:{[user.uid]:{nickname:nick,email:user.email,role:'owner'}},inviteCode:roomCode,createdAt:serverTimestamp()});
+    batch.set(ref,{name,startDate,endDate,destination:$('#mDest').value.trim(),countries,baseCurrency:$('#mBase').value,foreignCurrencies:[...new Set(countries.map(x=>x.currency))].filter(x=>x!==$('#mBase').value),budget:Number($('#mBudget').value||0),ownerId:user.uid,memberIds:[user.uid],bannedMemberIds:[],members:{[user.uid]:{nickname:nick,email:user.email,role:'owner'}},inviteCode:roomCode,createdAt:serverTimestamp()});
     batch.set(doc(db,'invites',roomCode),{tripId:ref.id,ownerId:user.uid,createdAt:serverTimestamp(),permanent:true});
-    await batch.commit();
-    closeModal();await openTrip(ref.id);
+    await batch.commit();closeModal();await openTrip(ref.id);
   }catch(e){
     console.error('여행 생성 실패',e);
     if(message)message.textContent=`여행을 만들지 못했습니다: ${e.message||e}`;
@@ -155,8 +184,32 @@ function renderTabs(){$('#tabs').innerHTML=tabs.map(([k,l],i)=>`<button class="t
 function renderAll(){if(!currentTrip)return;renderOverview();renderItinerary();renderFlights();renderStays();renderMoney();renderExchange();renderPacking();renderMemos();renderMembers();renderPlaces()}
 function memberOptions(sel=''){return Object.entries(currentTrip.members||{}).map(([uid,m])=>`<option value="${uid}" ${uid===sel?'selected':''}>${esc(m.nickname||m.email)}</option>`).join('')}
 
-function renderOverview(){const ex=cache.expenses||[], shared=ex.filter(x=>x.type==='shared').reduce((a,b)=>a+Number(b.baseAmount||0),0),personal=ex.filter(x=>x.type==='personal').reduce((a,b)=>a+Number(b.baseAmount||0),0),budget=Number(currentTrip.budget||0);$('#panel-overview').innerHTML=`<div class="kpis"><div class="kpi"><div class="l">총 예산</div><div class="n">${money(budget,currentTrip.baseCurrency)}</div></div><div class="kpi"><div class="l">공동 지출</div><div class="n">${money(shared,currentTrip.baseCurrency)}</div></div><div class="kpi"><div class="l">개인 지출</div><div class="n">${money(personal,currentTrip.baseCurrency)}</div></div><div class="kpi"><div class="l">남은 예산</div><div class="n ${budget-shared-personal<0?'danger':'good'}">${money(budget-shared-personal,currentTrip.baseCurrency)}</div></div></div><div class="section-title"><h2>여행 한눈에 보기</h2><button id="editTrip" class="btn">여행 정보 수정</button></div><div class="grid"><div class="card"><b>일정</b><p class="big">${(cache.itinerary||[]).length}개</p><span class="muted">등록된 코스</span></div><div class="card"><b>숙소</b><p class="big">${(cache.stays||[]).length}곳</p><span class="muted">예약/예정</span></div><div class="card"><b>동행자</b><p class="big">${currentTrip.memberIds?.length||1}명</p><span class="muted">같이 편집 중</span></div></div>`;$('#editTrip').onclick=tripEditForm}
-
+function expenseBreakdown(){
+  const rows=Object.entries(currentTrip.members||{}).map(([uid,m])=>({uid,name:m.nickname||m.email||'동행자',personal:0,shared:0,total:0}));
+  const byUid=Object.fromEntries(rows.map(x=>[x.uid,x]));
+  for(const expense of cache.expenses||[]){
+    const amount=Number(expense.baseAmount||0);
+    if(expense.type==='personal'){
+      const uid=expense.personalUid||expense.payerUid;
+      if(byUid[uid])byUid[uid].personal+=amount;
+    }else{
+      const participants=(Array.isArray(expense.participantUids)&&expense.participantUids.length?expense.participantUids:Object.keys(currentTrip.members||{})).filter(uid=>byUid[uid]);
+      const share=participants.length?amount/participants.length:0;
+      participants.forEach(uid=>byUid[uid].shared+=share);
+    }
+  }
+  rows.forEach(x=>x.total=x.personal+x.shared);
+  return rows;
+}
+function expenseBreakdownHtml(){
+  const rows=expenseBreakdown();
+  return `<div class="expense-breakdown">${rows.map(x=>`<div class="breakdown-row"><div><b>${esc(x.name)}</b><div class="sub">개인 ${money(x.personal,currentTrip.baseCurrency)} + 공동 분담 ${money(x.shared,currentTrip.baseCurrency)}</div></div><strong>${money(x.total,currentTrip.baseCurrency)}</strong></div>`).join('')}</div>`;
+}
+function renderOverview(){
+  const ex=cache.expenses||[],shared=ex.filter(x=>x.type==='shared').reduce((a,b)=>a+Number(b.baseAmount||0),0),personal=ex.filter(x=>x.type==='personal').reduce((a,b)=>a+Number(b.baseAmount||0),0),budget=Number(currentTrip.budget||0);
+  $('#panel-overview').innerHTML=`<div class="kpis"><div class="kpi"><div class="l">총 예산</div><div class="n">${money(budget,currentTrip.baseCurrency)}</div></div><div class="kpi"><div class="l">공동 지출</div><div class="n">${money(shared,currentTrip.baseCurrency)}</div></div><div class="kpi"><div class="l">개인 지출</div><div class="n">${money(personal,currentTrip.baseCurrency)}</div></div><div class="kpi"><div class="l">남은 예산</div><div class="n ${budget-shared-personal<0?'danger':'good'}">${money(budget-shared-personal,currentTrip.baseCurrency)}</div></div></div><div class="section-title"><h2>개인별 사용 금액</h2></div><div class="card"><p class="note">개인비용과 공동비용의 본인 분담액을 합산한 금액입니다.</p>${expenseBreakdownHtml()}</div><div class="section-title"><h2>여행 한눈에 보기</h2><button id="editTrip" class="btn">여행 정보 수정</button></div><div class="grid"><div class="card"><b>일정</b><p class="big">${(cache.itinerary||[]).length}개</p><span class="muted">등록된 코스</span></div><div class="card"><b>숙소</b><p class="big">${(cache.stays||[]).length}곳</p><span class="muted">예약/예정</span></div><div class="card"><b>동행자</b><p class="big">${currentTrip.memberIds?.length||1}명</p><span class="muted">같이 편집 중</span></div></div>`;
+  $('#editTrip').onclick=tripEditForm;
+}
 function days(){if(!currentTrip.startDate||!currentTrip.endDate)return[];let d=new Date(currentTrip.startDate+'T00:00:00'),e=new Date(currentTrip.endDate+'T00:00:00'),out=[];while(d<=e&&out.length<40){out.push(d.toISOString().slice(0,10));d.setDate(d.getDate()+1)}return out}
 function renderItinerary(){
   const list=cache.itinerary||[],validDays=days(),changed=list.filter(x=>!validDays.includes(x.date)).sort((a,b)=>(a.date||'').localeCompare(b.date||''));
@@ -284,49 +337,56 @@ function renderStays(){const a=cache.stays||[];$('#panel-stays').innerHTML=`<div
 function stayForm(){modal(`<h3>숙소 추가</h3><div class="field"><label>숙소명</label><input id="stName"></div><div class="row"><div class="field"><label>체크인</label><input id="stIn" type="date"></div><div class="field"><label>체크아웃</label><input id="stOut" type="date"></div></div><div class="field"><label>주소</label><input id="stAddr"></div><div class="field"><label>예약번호</label><input id="stBook"></div><div class="row"><button class="btn" data-close="1">취소</button><button id="stSave" class="btn primary">저장</button></div>`);setTimeout(()=>$('#stSave').onclick=async()=>{await addDoc(collection(db,'trips',currentTrip.id,'stays'),{name:$('#stName').value,checkin:$('#stIn').value,checkout:$('#stOut').value,address:$('#stAddr').value,booking:$('#stBook').value,createdAt:serverTimestamp()});closeModal()},0)}
 
 function settlements(){const ms=Object.keys(currentTrip.members||{}), bal=Object.fromEntries(ms.map(x=>[x,0]));for(const e of cache.expenses||[]){const amt=Number(e.baseAmount||0),payer=e.payerUid;if(!bal.hasOwnProperty(payer))continue;if(e.type==='shared'){const participants=e.participantUids?.length?e.participantUids:ms;const share=amt/participants.length;bal[payer]+=amt;participants.forEach(u=>{if(bal.hasOwnProperty(u))bal[u]-=share})}else{const owner=e.personalUid||payer;bal[payer]+=amt;if(bal.hasOwnProperty(owner))bal[owner]-=amt}}const debt=Object.entries(bal).filter(([,v])=>v<-.01).map(([u,v])=>[u,-v]),cred=Object.entries(bal).filter(([,v])=>v>.01).map(([u,v])=>[u,v]),out=[];let i=0,j=0;while(i<debt.length&&j<cred.length){const a=Math.min(debt[i][1],cred[j][1]);out.push({from:debt[i][0],to:cred[j][0],amount:a});debt[i][1]-=a;cred[j][1]-=a;if(debt[i][1]<.01)i++;if(cred[j][1]<.01)j++}return out}
-function renderMoney(){const a=cache.expenses||[],sett=settlements();$('#panel-money').innerHTML=`<div class="section-title"><h2>예산·지출 관리</h2><button id="addExpense" class="btn primary">+ 지출 추가</button></div><div class="list">${a.length?a.map(e=>`<div class="item"><div><h4>${esc(e.title)}</h4><div class="sub">${e.type==='shared'?'공동비용':'개인비용'} · 결제 ${esc(currentTrip.members?.[e.payerUid]?.nickname||'')}</div><div class="sub">${money(e.originalAmount,e.currency)} → ${money(e.baseAmount,currentTrip.baseCurrency)} ${e.fxRate?`· 적용환율 ${fmt(e.fxRate)}`:''}</div></div><div class="right"><div class="money">${money(e.baseAmount,currentTrip.baseCurrency)}</div><div class="actions"><button class="btn small" data-edit="expenses:${e.id}">수정</button><button class="btn small" data-del="expenses:${e.id}">삭제</button></div></div></div>`).join(''):'<div class="empty">공동비와 개인비를 기록하면 자동 정산됩니다.</div>'}</div><div class="section-title"><h2>최종 정산</h2></div><div class="card">${sett.length?sett.map(s=>`<div class="item"><b>${esc(currentTrip.members[s.from]?.nickname)} → ${esc(currentTrip.members[s.to]?.nickname)}</b><span class="money">${money(s.amount,currentTrip.baseCurrency)}</span></div>`).join(''):'현재 서로 보낼 돈이 없습니다.'}</div>`;$('#addExpense').onclick=expenseForm;bindDeletes()}
+function renderMoney(){
+  const a=cache.expenses||[],sett=settlements(),shared=a.filter(x=>x.type==='shared').reduce((n,x)=>n+Number(x.baseAmount||0),0),personal=a.filter(x=>x.type==='personal').reduce((n,x)=>n+Number(x.baseAmount||0),0);
+  $('#panel-money').innerHTML=`<div class="section-title"><h2>예산·지출 관리</h2><button id="addExpense" class="btn primary">+ 지출 추가</button></div><div class="kpis compact"><div class="kpi"><div class="l">공동 지출</div><div class="n">${money(shared,currentTrip.baseCurrency)}</div></div><div class="kpi"><div class="l">개인 지출</div><div class="n">${money(personal,currentTrip.baseCurrency)}</div></div></div><div class="section-title"><h2>개인별 사용 금액</h2></div><div class="card">${expenseBreakdownHtml()}</div><div class="section-title"><h2>결제 내역</h2></div><div class="list">${a.length?a.map(e=>`<div class="item"><div><h4>${esc(e.title)}</h4><div class="sub">${e.type==='shared'?'공동비용':'개인비용'} · 결제 ${esc(currentTrip.members?.[e.payerUid]?.nickname||'')}</div><div class="sub">결제 통화 ${money(e.originalAmount,e.currency||currentTrip.baseCurrency)} → 기준 통화 ${money(e.baseAmount,currentTrip.baseCurrency)} ${e.fxRate?`· 적용환율 ${fmt(e.fxRate)}`:''}</div></div><div class="right"><div class="money">${money(e.baseAmount,currentTrip.baseCurrency)}</div><div class="actions"><button class="btn small" data-edit="expenses:${e.id}">수정</button><button class="btn small" data-del="expenses:${e.id}">삭제</button></div></div></div>`).join(''):'<div class="empty">공동비와 개인비를 기록하면 자동 정산됩니다.</div>'}</div><div class="section-title"><h2>최종 정산</h2></div><div class="card">${sett.length?sett.map(s=>`<div class="item"><b>${esc(currentTrip.members[s.from]?.nickname)} → ${esc(currentTrip.members[s.to]?.nickname)}</b><span class="money">${money(s.amount,currentTrip.baseCurrency)}</span></div>`).join(''):'현재 서로 보낼 돈이 없습니다.'}</div>`;
+  $('#addExpense').onclick=expenseForm;bindDeletes();
+}
 async function fxToBase(currency,amount,manualRate=0){
-  const numericAmount=Number(amount),numericRate=Number(manualRate||0),foreign=currentTrip.foreignCurrencies?.[0]||'JPY';
+  const numericAmount=Number(amount),numericRate=Number(manualRate||0);
   if(currency===currentTrip.baseCurrency)return {rate:1,base:numericAmount,source:'base'};
   if(numericRate>0)return {rate:numericRate,base:numericAmount*numericRate,source:'manual'};
-  if(currency===foreign){
-    const averageRate=exchangeStats().avg;
-    if(averageRate>0)return {rate:averageRate,base:numericAmount*averageRate,source:'exchange-average'};
-    throw Error(`환전 탭에 ${foreign} 환전 기록이 없습니다. 먼저 환전 내역을 기록하거나 수동 환율을 입력해 주세요.`);
-  }
-  throw Error(`${currency} 환전 기록이 없습니다. 수동 환율(1 ${currency} = 몇 ${currentTrip.baseCurrency}인지)을 입력해 주세요.`);
+  const averageRate=exchangeStats(currency).avg;
+  if(averageRate>0)return {rate:averageRate,base:numericAmount*averageRate,source:'exchange-average'};
+  throw Error(`환전 탭에 ${currency} 환전 기록이 없습니다. 먼저 환전 내역을 기록하거나 수동 환율을 입력해 주세요.`);
 }
 function expenseForm(){
-  const foreign=currentTrip.foreignCurrencies?.[0]||'JPY';
-  modal(`<h3>지출 추가</h3>
-    <div class="field"><label>내용</label><input id="exTitle" placeholder="저녁 식사"></div>
-    <div class="row"><div class="field"><label>금액</label><input id="exAmt" type="number" min="0" step="any"></div><div class="field"><label>통화</label><select id="exCur">${currencyOptions(foreign)}</select></div></div>
-    <div id="manualRateWrap" class="field"><label>수동 환율 (선택)</label><input id="exManualRate" type="number" min="0" step="any" placeholder="1 ${foreign} = 몇 ${currentTrip.baseCurrency}"><p class="note">비워두면 환전 탭의 실제 평균 환율을 사용합니다. 해당 통화의 환전 기록이 없을 때만 입력하세요.</p></div>
-    <div class="row"><div class="field"><label>비용 유형</label><select id="exType"><option value="shared">공동비용</option><option value="personal">개인비용</option></select></div><div class="field"><label>실제 결제자</label><select id="exPayer">${memberOptions(user.uid)}</select></div></div>
-    <div id="personalWrap" class="field hidden"><label>개인비용 사용자</label><select id="exPersonal">${memberOptions()}</select></div>
-    <div class="field"><label>결제수단</label><select id="exMethod"><option>공동 현금</option><option>개인 현금</option><option>개인 카드</option><option>공동 카드</option></select></div>
-    <div class="row"><button class="btn" data-close="1">취소</button><button id="exSave" class="btn primary">저장</button></div><p id="exMsg" class="note"></p>`);
+  const currencies=[currentTrip.baseCurrency,...tripForeignCurrencies(currentTrip)],initial=currencies[0];
+  modal(`<h3>지출 추가</h3><div class="field"><label>내용</label><input id="exTitle" placeholder="저녁 식사"></div><div class="row"><div class="field"><label>금액</label><input id="exAmt" type="number" min="0" step="any"></div><div class="field"><label>결제 통화</label><select id="exCur">${limitedCurrencyOptions(initial)}</select></div></div><div id="manualRateWrap" class="field"><label>수동 환율 (선택)</label><input id="exManualRate" type="number" min="0" step="any"><p class="note">비워두면 해당 통화의 실제 평균 환전가를 사용합니다.</p></div><div class="row"><div class="field"><label>비용 유형</label><select id="exType"><option value="shared">공동비용</option><option value="personal">개인비용</option></select></div><div class="field"><label>실제 결제자</label><select id="exPayer">${memberOptions(user.uid)}</select></div></div><div id="personalWrap" class="field hidden"><label>개인비용 사용자</label><select id="exPersonal">${memberOptions(user.uid)}</select></div><div class="field"><label>결제수단</label><select id="exMethod"><option>공동 현금</option><option>개인 현금</option><option>개인 카드</option><option>공동 카드</option></select></div><div class="row"><button class="btn" data-close="1">취소</button><button id="exSave" class="btn primary">저장</button></div><p id="exMsg" class="note"></p>`);
   const updateRateHint=()=>{const cur=$('#exCur').value;$('#exManualRate').placeholder=`1 ${cur} = 몇 ${currentTrip.baseCurrency}`;$('#manualRateWrap').classList.toggle('hidden',cur===currentTrip.baseCurrency)};
-  updateRateHint();$('#exCur').onchange=updateRateHint;
-  $('#exType').onchange=()=>$('#personalWrap').classList.toggle('hidden',$('#exType').value!=='personal');
+  updateRateHint();$('#exCur').onchange=updateRateHint;$('#exType').onchange=()=>$('#personalWrap').classList.toggle('hidden',$('#exType').value!=='personal');
   $('#exSave').onclick=async()=>{
     const button=$('#exSave'),message=$('#exMsg');
     try{
-      const title=$('#exTitle').value.trim(),amount=Number($('#exAmt').value),cur=$('#exCur').value,manualRate=Number($('#exManualRate').value||0);
-      if(!title)throw Error('지출 내용을 입력해 주세요.');
-      if(!(amount>0))throw Error('0보다 큰 금액을 입력해 주세요.');
+      const title=$('#exTitle').value.trim(),amount=Number($('#exAmt').value),cur=$('#exCur').value;
+      if(!title)throw Error('지출 내용을 입력해 주세요.');if(!(amount>0))throw Error('0보다 큰 금액을 입력해 주세요.');
       button.disabled=true;button.textContent='저장 중…';message.textContent='';
-      const res=await fxToBase(cur,amount,manualRate);
+      const res=await fxToBase(cur,amount,Number($('#exManualRate').value||0));
       await addDoc(collection(db,'trips',currentTrip.id,'expenses'),{title,originalAmount:amount,currency:cur,baseAmount:res.base,fxRate:res.rate,fxSource:res.source,type:$('#exType').value,payerUid:$('#exPayer').value,personalUid:$('#exType').value==='personal'?$('#exPersonal').value:null,participantUids:Object.keys(currentTrip.members||{}),method:$('#exMethod').value,createdBy:user.uid,createdAt:serverTimestamp()});
       closeModal();
     }catch(e){message.textContent=e.message||'지출을 저장하지 못했습니다.';button.disabled=false;button.textContent='저장';}
   };
 }
-
-function exchangeStats(){const a=cache.exchanges||[],base=a.reduce((s,x)=>s+Number(x.baseSpent||0),0),foreign=a.reduce((s,x)=>s+Number(x.foreignReceived||0),0);return {base,foreign,avg:foreign?base/foreign:0}}
-async function renderExchange(){const a=cache.exchanges||[],s=exchangeStats(),foreign=currentTrip.foreignCurrencies?.[0]||'JPY',plan=Number(currentTrip.exchangePlan||0);$('#panel-exchange').innerHTML=`<div class="section-title"><h2>환율·분할 환전</h2><button id="addExchange" class="btn primary">+ 환전 기록</button></div><div class="kpis"><div class="kpi"><div class="l">실제 평균 환율</div><div class="n" style="font-size:18px">${s.avg?(foreign==='JPY'?fmt(s.avg*100)+' /100 JPY':fmt(s.avg)+' /'+foreign):'환전 기록 없음'}</div></div><div class="kpi"><div class="l">환전 계획</div><div class="n">${money(plan,currentTrip.baseCurrency)}</div></div><div class="kpi"><div class="l">환전 완료</div><div class="n">${money(s.base,currentTrip.baseCurrency)}</div></div><div class="kpi"><div class="l">내 평균 환전가</div><div class="n" style="font-size:18px">${s.avg?(foreign==='JPY'?fmt(s.avg*100)+' /100 JPY':fmt(s.avg)+' /'+foreign):'-'}</div></div></div><div class="card" style="margin-top:12px"><div class="field"><label>총 환전 계획 금액</label><div class="row"><input id="planAmt" type="number" value="${plan}"><button id="savePlan" class="btn">계획 저장</button></div></div><div class="meta">진행률 ${plan?Math.min(100,s.base/plan*100).toFixed(1):0}% · 남은 계획 ${money(Math.max(0,plan-s.base),currentTrip.baseCurrency)} · 보유 외화 ${money(s.foreign,foreign)}</div></div><div class="section-title"><h2>환전 내역</h2></div><div class="list">${a.length?a.map(x=>`<div class="item"><div><h4>${esc(x.date)} · ${esc(currentTrip.members[x.memberUid]?.nickname||'')}</h4><div class="sub">${money(x.baseSpent,currentTrip.baseCurrency)} → ${money(x.foreignReceived,foreign)}</div><div class="sub">실제 환율 ${foreign==='JPY'?fmt(Number(x.rate)*100)+' /100 JPY':fmt(x.rate)+' /'+foreign}</div></div><div class="actions"><button class="btn small" data-edit="exchanges:${x.id}">수정</button><button class="btn small" data-del="exchanges:${x.id}">삭제</button></div></div>`).join(''):'<div class="empty">환율이 좋을 때 나눠 환전한 기록을 남겨보세요.</div>'}</div>`;$('#addExchange').onclick=exchangeForm;$('#savePlan').onclick=()=>updateDoc(doc(db,'trips',currentTrip.id),{exchangePlan:Number($('#planAmt').value||0)});bindDeletes()}
-function exchangeForm(){const foreign=currentTrip.foreignCurrencies?.[0]||'JPY';modal(`<h3>환전 기록</h3><div class="field"><label>환전자</label><select id="fxMember">${memberOptions(user.uid)}</select></div><div class="field"><label>환전일</label><input id="fxDate" type="date" value="${new Date().toISOString().slice(0,10)}"></div><div class="row"><div class="field"><label>사용한 ${currentTrip.baseCurrency}</label><input id="fxBase" type="number"></div><div class="field"><label>받은 ${foreign}</label><input id="fxForeign" type="number"></div></div><p class="note">은행/환전소에서 실제 받은 금액을 입력하면 실제 체감 환율을 계산합니다.</p><div class="row"><button class="btn" data-close="1">취소</button><button id="fxSave" class="btn primary">저장</button></div>`);setTimeout(()=>$('#fxSave').onclick=async()=>{const b=Number($('#fxBase').value),f=Number($('#fxForeign').value);await addDoc(collection(db,'trips',currentTrip.id,'exchanges'),{memberUid:$('#fxMember').value,date:$('#fxDate').value,baseSpent:b,foreignReceived:f,rate:f?b/f:0,createdAt:serverTimestamp()});closeModal()},0)}
-
+function exchangeStats(currency){
+  const first=tripForeignCurrencies(currentTrip)[0],a=(cache.exchanges||[]).filter(x=>(x.currency||first)===currency),base=a.reduce((n,x)=>n+Number(x.baseSpent||0),0),foreign=a.reduce((n,x)=>n+Number(x.foreignReceived||0),0);
+  return {base,foreign,avg:foreign?base/foreign:0,records:a};
+}
+function renderExchange(){
+  const currencies=tripForeignCurrencies(currentTrip);
+  if(!currencies.length){$('#panel-exchange').innerHTML=`<div class="section-title"><h2>환율·분할 환전</h2></div><div class="empty">여행 정보 수정에서 여행 국가를 추가하면 해당 국가 통화의 환전 기록을 관리할 수 있습니다.</div>`;return}
+  if(!currencies.includes(exchangeCurrency))exchangeCurrency=currencies[0];
+  const foreign=exchangeCurrency,s=exchangeStats(foreign),a=s.records,first=currencies[0],plan=Number(currentTrip.exchangePlans?.[foreign]??(foreign===first?currentTrip.exchangePlan:0));
+  const rateText=s.avg?(foreign==='JPY'?`${fmt(s.avg*100)} /100 JPY`:`${fmt(s.avg)} /${foreign}`):'환전 기록 없음';
+  $('#panel-exchange').innerHTML=`<div class="section-title"><h2>환율·분할 환전</h2><button id="addExchange" class="btn primary">+ 환전 기록</button></div><div class="currency-tabs">${currencies.map(c=>`<button class="btn small ${c===foreign?'primary':''}" data-fx-currency="${c}">${c}</button>`).join('')}</div><div class="kpis"><div class="kpi"><div class="l">실제 평균 환율</div><div class="n small-number">${rateText}</div></div><div class="kpi"><div class="l">환전 계획</div><div class="n">${money(plan,currentTrip.baseCurrency)}</div></div><div class="kpi"><div class="l">환전 완료</div><div class="n">${money(s.base,currentTrip.baseCurrency)}</div></div><div class="kpi"><div class="l">보유 외화</div><div class="n">${money(s.foreign,foreign)}</div></div></div><div class="card exchange-plan"><div class="field"><label>${foreign} 환전 계획 금액</label><div class="row"><input id="planAmt" type="number" value="${plan}"><button id="savePlan" class="btn">계획 저장</button></div></div><div class="meta">진행률 ${plan?Math.min(100,s.base/plan*100).toFixed(1):0}% · 남은 계획 ${money(Math.max(0,plan-s.base),currentTrip.baseCurrency)}</div></div><div class="section-title"><h2>${foreign} 환전 내역</h2></div><div class="list">${a.length?a.map(x=>`<div class="item"><div><h4>${esc(x.date)} · ${esc(currentTrip.members[x.memberUid]?.nickname||'')}</h4><div class="sub">${money(x.baseSpent,currentTrip.baseCurrency)} → ${money(x.foreignReceived,foreign)}</div><div class="sub">실제 환율 ${foreign==='JPY'?fmt(Number(x.rate)*100)+' /100 JPY':fmt(x.rate)+' /'+foreign}</div></div><div class="actions"><button class="btn small" data-edit="exchanges:${x.id}">수정</button><button class="btn small" data-del="exchanges:${x.id}">삭제</button></div></div>`).join(''):'<div class="empty">이 통화의 환전 기록이 아직 없습니다.</div>'}</div>`;
+  $$('[data-fx-currency]').forEach(b=>b.onclick=()=>{exchangeCurrency=b.dataset.fxCurrency;renderExchange()});
+  $('#addExchange').onclick=exchangeForm;$('#savePlan').onclick=()=>updateDoc(doc(db,'trips',currentTrip.id),{[`exchangePlans.${foreign}`]:Number($('#planAmt').value||0)});bindDeletes();
+}
+function exchangeForm(){
+  const currencies=tripForeignCurrencies(currentTrip);if(!currencies.length)return alert('먼저 여행 정보에서 여행 국가를 추가해 주세요.');
+  const initial=currencies.includes(exchangeCurrency)?exchangeCurrency:currencies[0];
+  modal(`<h3>환전 기록</h3><div class="field"><label>환전 통화</label><select id="fxCurrency">${currencies.map(c=>`<option ${c===initial?'selected':''}>${c} · ${currencyDisplay?.of(c)||c}</option>`).join('')}</select></div><div class="field"><label>환전자</label><select id="fxMember">${memberOptions(user.uid)}</select></div><div class="field"><label>환전일</label><input id="fxDate" type="date" value="${new Date().toISOString().slice(0,10)}"></div><div class="row"><div class="field"><label>사용한 ${currentTrip.baseCurrency}</label><input id="fxBase" type="number"></div><div class="field"><label>받은 외화</label><input id="fxForeign" type="number"></div></div><p class="note">실제로 사용한 기준 통화와 받은 외화를 입력하세요.</p><div class="row"><button class="btn" data-close="1">취소</button><button id="fxSave" class="btn primary">저장</button></div>`);
+  $('#fxSave').onclick=async()=>{const b=Number($('#fxBase').value),f=Number($('#fxForeign').value),currency=$('#fxCurrency').value;if(!(b>0&&f>0))return alert('환전 금액을 올바르게 입력해 주세요.');await addDoc(collection(db,'trips',currentTrip.id,'exchanges'),{currency,memberUid:$('#fxMember').value,date:$('#fxDate').value,baseSpent:b,foreignReceived:f,rate:b/f,createdAt:serverTimestamp()});exchangeCurrency=currency;closeModal()};
+}
 function renderPacking(){const a=cache.packing||[];$('#panel-packing').innerHTML=`<div class="section-title"><h2>준비물 체크리스트</h2><button id="addPack" class="btn primary">+ 준비물</button></div><div class="list">${a.length?a.map(x=>`<div class="item"><label class="check"><input type="checkbox" data-check="${x.id}" ${x.done?'checked':''}><span style="${x.done?'text-decoration:line-through;color:#999':''}">${esc(x.text)}</span></label><div class="actions"><button class="btn small" data-edit="packing:${x.id}">수정</button><button class="btn small" data-del="packing:${x.id}">삭제</button></div></div>`).join(''):'<div class="empty">여권, eSIM, 상비약 등 함께 체크하세요.</div>'}</div>`;$('#addPack').onclick=()=>simpleAdd('packing','준비물 추가','준비물','text');$$('[data-check]').forEach(c=>c.onchange=()=>updateDoc(doc(db,'trips',currentTrip.id,'packing',c.dataset.check),{done:c.checked,doneBy:c.checked?user.uid:null}));bindDeletes()}
 function renderMemos(){const a=cache.memos||[];$('#panel-memos').innerHTML=`<div class="section-title"><h2>공동 메모</h2><button id="addMemo" class="btn primary">+ 메모</button></div><div class="list">${a.length?a.map(x=>`<div class="item"><div><h4>${esc(x.title||'메모')}</h4><div>${esc(x.text)}</div></div><div class="actions"><button class="btn small" data-edit="memos:${x.id}">수정</button><button class="btn small" data-del="memos:${x.id}">삭제</button></div></div>`).join(''):'<div class="empty">예약 주의사항, 쇼핑 목록, 꼭 할 일 등을 적어두세요.</div>'}</div>`;$('#addMemo').onclick=()=>modal(`<h3>메모 추가</h3><div class="field"><label>제목</label><input id="meTitle"></div><div class="field"><label>내용</label><textarea id="meText"></textarea></div><div class="row"><button class="btn" data-close="1">취소</button><button id="meSave" class="btn primary">저장</button></div>`);document.addEventListener('click',async e=>{if(e.target.id==='meSave'){await addDoc(collection(db,'trips',currentTrip.id,'memos'),{title:$('#meTitle').value,text:$('#meText').value,createdBy:user.uid,createdAt:serverTimestamp()});closeModal()}});bindDeletes()}
 function simpleAdd(sub,title,label,key){modal(`<h3>${title}</h3><div class="field"><label>${label}</label><input id="simpleVal"></div><div class="row"><button class="btn" data-close="1">취소</button><button id="simpleSave" class="btn primary">저장</button></div>`);setTimeout(()=>$('#simpleSave').onclick=async()=>{await addDoc(collection(db,'trips',currentTrip.id,sub),{[key]:$('#simpleVal').value.trim(),done:false,createdBy:user.uid,createdAt:serverTimestamp()});closeModal()},0)}
@@ -382,27 +442,28 @@ function renderMembers(){
 
 function selected(value,current){return value===current?'selected':''}
 function tripEditForm(){
-  const foreign=currentTrip.foreignCurrencies?.[0]||'JPY';
+  const savedCountries=tripCountries(currentTrip),selectedCodes=savedCountries.length?savedCountries.map(x=>x.code):tripForeignCurrencies(currentTrip).map(currency=>countryCurrencyMap.find(x=>x[2]===currency)?.[0]).filter(Boolean);
   modal(`<h3>여행 정보 수정</h3>
     <div class="field"><label>여행 이름</label><input id="teName" value="${esc(currentTrip.name||'')}"></div>
     <div class="row"><div class="field"><label>출발일</label><input id="teStart" type="date" value="${esc(currentTrip.startDate||'')}"></div><div class="field"><label>종료일</label><input id="teEnd" type="date" value="${esc(currentTrip.endDate||'')}"></div></div>
     <div class="field"><label>대표 여행지</label><input id="teDest" value="${esc(currentTrip.destination||'')}"></div>
-    <div class="row"><div class="field"><label>기준 통화</label><select id="teBase">${currencyOptions(currentTrip.baseCurrency)}</select></div><div class="field"><label>현지 통화</label><select id="teForeign">${currencyOptions(foreign)}</select></div></div>
+    <div class="field"><label>여행 국가 (선택)</label><div id="teCountries" class="country-list"></div><button id="teAddCountry" type="button" class="btn country-add">+ 국가 추가</button><p class="note">선택한 국가의 통화만 지출과 환전 화면에 표시됩니다.</p></div>
+    <div class="field"><label>기준 통화</label><select id="teBase">${currencyOptions(currentTrip.baseCurrency)}</select></div>
     <div class="field"><label>총 여행 예산</label><input id="teBudget" type="number" min="0" value="${Number(currentTrip.budget||0)}"></div>
     <p id="teMsg" class="note">기존 지출이 없는 경우에만 기준 통화를 변경할 수 있습니다.</p>
     <div class="row"><button class="btn" data-close="1">취소</button><button id="teSave" class="btn primary">수정 저장</button></div>`);
+  bindCountryEditor('teCountries','teAddCountry',selectedCodes);
   $('#teSave').onclick=async()=>{
     const button=$('#teSave'),message=$('#teMsg');
     try{
-      const name=$('#teName').value.trim(),startDate=$('#teStart').value,endDate=$('#teEnd').value,newBase=$('#teBase').value;
+      const name=$('#teName').value.trim(),startDate=$('#teStart').value,endDate=$('#teEnd').value,newBase=$('#teBase').value,countries=readCountries('teCountries');
       if(!name)throw Error('여행 이름을 입력해 주세요.');
       if(!startDate||!endDate||endDate<startDate)throw Error('여행 기간을 올바르게 입력해 주세요.');
-      if(newBase!==currentTrip.baseCurrency&&(cache.expenses||[]).length)throw Error('기존 지출이 있는 여행은 기준 통화를 변경할 수 없습니다. 지출 통화 표시가 잘못되는 것을 방지하기 위한 제한입니다.');
+      if(newBase!==currentTrip.baseCurrency&&(cache.expenses||[]).length)throw Error('기존 지출이 있는 여행은 기준 통화를 변경할 수 없습니다.');
       button.disabled=true;button.textContent='저장 중…';
-      const updates={name,startDate,endDate,destination:$('#teDest').value.trim(),baseCurrency:newBase,foreignCurrencies:[$('#teForeign').value],budget:Number($('#teBudget').value||0),updatedAt:serverTimestamp(),updatedBy:user.uid};
-      const batch=writeBatch(db);
-      batch.update(doc(db,'trips',currentTrip.id),updates);
-      await batch.commit();closeModal();
+      const foreignCurrencies=countries.length?[...new Set(countries.map(x=>x.currency))].filter(x=>x!==newBase):[];
+      await updateDoc(doc(db,'trips',currentTrip.id),{name,startDate,endDate,destination:$('#teDest').value.trim(),countries,baseCurrency:newBase,foreignCurrencies,budget:Number($('#teBudget').value||0),updatedAt:serverTimestamp(),updatedBy:user.uid});
+      closeModal();
     }catch(e){message.textContent=e.message||String(e);button.disabled=false;button.textContent='수정 저장';}
   };
 }
@@ -414,8 +475,8 @@ function editRecord(sub,id){
   if(sub==='places')body=`<div class="field"><label>Google Maps 공유 링크</label><input id="edUrl" value="${esc(item.mapsUrl||'')}"><p id="edLinkMsg" class="note"></p></div><input id="edLat" type="hidden" value="${item.lat??''}"><input id="edLng" type="hidden" value="${item.lng??''}"><div class="field"><label>장소명</label><input id="edName" value="${esc(item.name||'')}"></div><div class="field"><label>분류</label><select id="edCategory">${['관광','맛집','카페','쇼핑','야경','숙소','기타'].map(v=>`<option ${selected(v,item.category)}>${v}</option>`).join('')}</select></div><div class="field"><label>메모</label><textarea id="edNote">${esc(item.note||'')}</textarea></div>`;
   if(sub==='flights')body=`<div class="row"><div class="field"><label>항공사</label><input id="edAirline" value="${esc(item.airline||'')}"></div><div class="field"><label>편명</label><input id="edFlightNo" value="${esc(item.flightNo||'')}"></div></div><div class="field"><label>날짜</label><input id="edDate" type="date" value="${esc(item.date||'')}"></div><div class="row"><div class="field"><label>출발지</label><input id="edFrom" value="${esc(item.from||'')}"></div><div class="field"><label>출발시간</label><input id="edDepart" type="time" value="${esc(item.depart||'')}"></div></div><div class="row"><div class="field"><label>도착지</label><input id="edTo" value="${esc(item.to||'')}"></div><div class="field"><label>도착시간</label><input id="edArrive" type="time" value="${esc(item.arrive||'')}"></div></div><div class="field"><label>예약번호</label><input id="edBooking" value="${esc(item.booking||'')}"></div>`;
   if(sub==='stays')body=`<div class="field"><label>숙소명</label><input id="edName" value="${esc(item.name||'')}"></div><div class="row"><div class="field"><label>체크인</label><input id="edCheckin" type="date" value="${esc(item.checkin||'')}"></div><div class="field"><label>체크아웃</label><input id="edCheckout" type="date" value="${esc(item.checkout||'')}"></div></div><div class="field"><label>주소</label><input id="edAddress" value="${esc(item.address||'')}"></div><div class="field"><label>예약번호</label><input id="edBooking" value="${esc(item.booking||'')}"></div>`;
-  if(sub==='expenses')body=`<div class="field"><label>내용</label><input id="edTitle" value="${esc(item.title||'')}"></div><div class="row"><div class="field"><label>금액</label><input id="edAmount" type="number" value="${Number(item.originalAmount||0)}"></div><div class="field"><label>통화</label><select id="edCurrency">${currencyOptions(item.currency)}</select></div></div><div class="field"><label>수동 환율 (선택)</label><input id="edManualRate" type="number" min="0" step="any" value="${item.fxSource==='manual'?Number(item.fxRate||0):''}" placeholder="환전 기록이 없을 때 입력"></div><div class="row"><div class="field"><label>비용 유형</label><select id="edType"><option value="shared" ${selected('shared',item.type)}>공동비용</option><option value="personal" ${selected('personal',item.type)}>개인비용</option></select></div><div class="field"><label>실제 결제자</label><select id="edPayer">${memberOptions(item.payerUid)}</select></div></div><div class="field"><label>개인비용 사용자</label><select id="edPersonal">${memberOptions(item.personalUid)}</select></div><p id="editMsg" class="note"></p>`;
-  if(sub==='exchanges')body=`<div class="field"><label>환전자</label><select id="edMember">${memberOptions(item.memberUid)}</select></div><div class="field"><label>환전일</label><input id="edDate" type="date" value="${esc(item.date||'')}"></div><div class="row"><div class="field"><label>사용한 기준 통화</label><input id="edBase" type="number" value="${Number(item.baseSpent||0)}"></div><div class="field"><label>받은 외화</label><input id="edForeign" type="number" value="${Number(item.foreignReceived||0)}"></div></div>`;
+  if(sub==='expenses')body=`<div class="field"><label>내용</label><input id="edTitle" value="${esc(item.title||'')}"></div><div class="row"><div class="field"><label>금액</label><input id="edAmount" type="number" value="${Number(item.originalAmount||0)}"></div><div class="field"><label>결제 통화</label><select id="edCurrency">${limitedCurrencyOptions(item.currency)}</select></div></div><div class="field"><label>수동 환율 (선택)</label><input id="edManualRate" type="number" min="0" step="any" value="${item.fxSource==='manual'?Number(item.fxRate||0):''}" placeholder="환전 기록이 없을 때 입력"></div><div class="row"><div class="field"><label>비용 유형</label><select id="edType"><option value="shared" ${selected('shared',item.type)}>공동비용</option><option value="personal" ${selected('personal',item.type)}>개인비용</option></select></div><div class="field"><label>실제 결제자</label><select id="edPayer">${memberOptions(item.payerUid)}</select></div></div><div class="field"><label>개인비용 사용자</label><select id="edPersonal">${memberOptions(item.personalUid)}</select></div><p id="editMsg" class="note"></p>`;
+  if(sub==='exchanges')body=`<div class="field"><label>환전 통화</label><select id="edFxCurrency">${tripForeignCurrencies(currentTrip).map(c=>`<option ${selected(c,item.currency||tripForeignCurrencies(currentTrip)[0])}>${c}</option>`).join('')}</select></div><div class="field"><label>환전자</label><select id="edMember">${memberOptions(item.memberUid)}</select></div><div class="field"><label>환전일</label><input id="edDate" type="date" value="${esc(item.date||'')}"></div><div class="row"><div class="field"><label>사용한 기준 통화</label><input id="edBase" type="number" value="${Number(item.baseSpent||0)}"></div><div class="field"><label>받은 외화</label><input id="edForeign" type="number" value="${Number(item.foreignReceived||0)}"></div></div>`;
   if(sub==='packing')body=`<div class="field"><label>준비물</label><input id="edText" value="${esc(item.text||'')}"></div>`;
   if(sub==='memos')body=`<div class="field"><label>제목</label><input id="edTitle" value="${esc(item.title||'')}"></div><div class="field"><label>내용</label><textarea id="edText">${esc(item.text||'')}</textarea></div>`;
   modal(`<h3>항목 수정</h3>${body}<div class="row"><button class="btn" data-close="1">취소</button><button id="editSave" class="btn primary">수정 저장</button></div>`);
@@ -429,7 +490,7 @@ function editRecord(sub,id){
       if(sub==='flights')Object.assign(data,{airline:$('#edAirline').value.trim(),flightNo:$('#edFlightNo').value.trim(),date:$('#edDate').value,from:$('#edFrom').value.trim(),depart:$('#edDepart').value,to:$('#edTo').value.trim(),arrive:$('#edArrive').value,booking:$('#edBooking').value.trim()});
       if(sub==='stays')Object.assign(data,{name:$('#edName').value.trim(),checkin:$('#edCheckin').value,checkout:$('#edCheckout').value,address:$('#edAddress').value.trim(),booking:$('#edBooking').value.trim()});
       if(sub==='expenses'){const amount=Number($('#edAmount').value),currency=$('#edCurrency').value,converted=await fxToBase(currency,amount,Number($('#edManualRate').value||0));Object.assign(data,{title:$('#edTitle').value.trim(),originalAmount:amount,currency,baseAmount:converted.base,fxRate:converted.rate,fxSource:converted.source,type:$('#edType').value,payerUid:$('#edPayer').value,personalUid:$('#edType').value==='personal'?$('#edPersonal').value:null});}
-      if(sub==='exchanges'){const baseSpent=Number($('#edBase').value),foreignReceived=Number($('#edForeign').value);Object.assign(data,{memberUid:$('#edMember').value,date:$('#edDate').value,baseSpent,foreignReceived,rate:foreignReceived?baseSpent/foreignReceived:0});}
+      if(sub==='exchanges'){const baseSpent=Number($('#edBase').value),foreignReceived=Number($('#edForeign').value);Object.assign(data,{currency:$('#edFxCurrency').value,memberUid:$('#edMember').value,date:$('#edDate').value,baseSpent,foreignReceived,rate:foreignReceived?baseSpent/foreignReceived:0});}
       if(sub==='packing')Object.assign(data,{text:$('#edText').value.trim()});
       if(sub==='memos')Object.assign(data,{title:$('#edTitle').value.trim(),text:$('#edText').value});
       await updateDoc(doc(db,'trips',currentTrip.id,sub,id),data);closeModal();

@@ -17,3 +17,20 @@
 .place-group{margin-top:18px}.place-group>.section-title{margin-bottom:8px}.place-group>.section-title h3{margin:0}.place-group .actions{display:flex;flex-wrap:wrap;justify-content:flex-end}.place-group a.btn{text-decoration:none}@media(max-width:620px){.place-group .item{flex-direction:column}.place-group .actions{width:100%;justify-content:flex-start}}
 
 .data-status{grid-column:1/-1;padding:10px 12px;border:1px solid #e8cf9a;background:#fff8df;color:#755b24;border-radius:12px;font-size:13px;line-height:1.45}
+
+.country-list{display:grid;gap:8px;margin-bottom:8px}
+.country-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;align-items:center}
+.country-add{width:100%;border-style:dashed}
+.currency-tabs{display:flex;gap:8px;overflow-x:auto;padding:2px 0 12px}
+.currency-tabs .btn{flex:0 0 auto}
+.exchange-plan{margin-top:12px}
+.small-number{font-size:18px!important}
+.expense-breakdown{display:grid}
+.breakdown-row{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:12px 0;border-bottom:1px solid var(--line,#e7e7e7)}
+.breakdown-row:last-child{border-bottom:0}
+.breakdown-row strong{text-align:right;white-space:nowrap}
+.kpis.compact{grid-template-columns:repeat(2,minmax(0,1fr))}
+@media(max-width:520px){
+  .breakdown-row{align-items:flex-start;flex-direction:column;gap:6px}
+  .breakdown-row strong{align-self:flex-end}
+}
