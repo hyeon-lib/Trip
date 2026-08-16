@@ -1,7 +1,7 @@
 import { firebaseConfig } from './firebase-config.js';
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/11.10.0/firebase-app.js';
 import { getAuth, onAuthStateChanged, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut, GoogleAuthProvider, signInWithPopup, updateProfile } from 'https://www.gstatic.com/firebasejs/11.10.0/firebase-auth.js';
-import { getFirestore, collection, doc, addDoc, setDoc, getDoc, updateDoc, deleteDoc, query, where, onSnapshot, serverTimestamp, writeBatch, arrayUnion } from 'https://www.gstatic.com/firebasejs/11.10.0/firebase-firestore.js';
+import { getFirestore, collection, doc, addDoc, setDoc, getDoc, updateDoc, deleteDoc, query, where, onSnapshot, serverTimestamp, writeBatch, arrayUnion, arrayRemove, deleteField } from 'https://www.gstatic.com/firebasejs/11.10.0/firebase-firestore.js';
 
 const app = initializeApp(firebaseConfig); const auth = getAuth(app); const db = getFirestore(app);
 const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)];
@@ -107,13 +107,40 @@ async function issueInviteCode(){
   await navigator.clipboard?.writeText(newCode).catch(()=>{});
   alert(`새 초대코드 ${newCode}가 발급되었습니다.${oldCode?' 이전 코드는 더 이상 사용할 수 없습니다.':''}`);
 }
+async function removeMember(uid){
+  if(!currentTrip||currentTrip.ownerId!==user.uid||uid===user.uid)return;
+  const member=currentTrip.members?.[uid];
+  if(!member)return;
+  if(!confirm(`${member.nickname||member.email}님을 이 여행에서 내보낼까요? 해당 사용자는 즉시 여행 데이터에 접근할 수 없게 됩니다.`))return;
+  try{
+    await updateDoc(doc(db,'trips',currentTrip.id),{memberIds:arrayRemove(uid),[`members.${uid}`]:deleteField(),updatedAt:serverTimestamp(),updatedBy:user.uid});
+  }catch(e){alert(`내보내지 못했습니다: ${e.message||e}`);}
+}
+async function leaveTrip(){
+  if(!currentTrip||currentTrip.ownerId===user.uid)return alert('방장은 바로 탈퇴할 수 없습니다. 먼저 방장 권한을 이전해야 합니다.');
+  if(!confirm('이 여행에서 탈퇴할까요? 탈퇴 즉시 여행 데이터에 접근할 수 없게 됩니다.'))return;
+  const tripId=currentTrip.id;
+  try{
+    cleanupSub();
+    await updateDoc(doc(db,'trips',tripId),{memberIds:arrayRemove(user.uid),[`members.${user.uid}`]:deleteField(),updatedAt:serverTimestamp(),updatedBy:user.uid});
+    $('#tripView').classList.add('hidden');$('#homeView').classList.remove('hidden');currentTrip=null;
+  }catch(e){
+    alert(`탈퇴하지 못했습니다: ${e.message||e}`);
+    await openTrip(tripId).catch(()=>showHome());
+  }
+}
 function renderMembers(){
   const owner=currentTrip.ownerId===user.uid;
   const inviteCard=owner?`<div class="card"><b>여행 입장 코드</b><p class="big">${currentTrip.inviteCode?esc(currentTrip.inviteCode):'아직 발급하지 않음'}</p><p class="note">방장만 코드를 발급할 수 있습니다. 동행자는 로그인 후 홈의 “초대코드 참가”에서 이 코드를 입력해야 여행방에 들어올 수 있습니다. 새 코드를 발급하면 이전 코드는 즉시 폐기됩니다.</p><div class="actions"><button id="issueInviteBtn" class="btn primary">${currentTrip.inviteCode?'새 코드 재발급':'초대코드 발급'}</button>${currentTrip.inviteCode?'<button id="memberCopyInvite" class="btn">코드 복사</button>':''}</div></div>`:`<div class="card"><b>초대는 방장이 관리합니다</b><p class="note">현재 여행에 이미 참여 중입니다. 새로운 동행자에게 입장 코드를 전달해야 한다면 방장에게 요청하세요.</p></div>`;
-  $('#panel-members').innerHTML=`<div class="section-title"><h2>동행자</h2></div>${inviteCard}<div class="section-title"><h2>${currentTrip.memberIds?.length||1}명 참여 중</h2></div><div class="list">${Object.entries(currentTrip.members||{}).map(([uid,m])=>`<div class="item"><div><h4>${esc(m.nickname||m.email)}</h4><div class="sub">${esc(m.email||'')} · ${m.role==='owner'?'방장':'동행자'}</div></div>${uid===user.uid?'<span class="pill">나</span>':''}</div>`).join('')}</div>`;
+  const members=Object.entries(currentTrip.members||{}).map(([uid,m])=>`<div class="item"><div><h4>${esc(m.nickname||m.email)}</h4><div class="sub">${esc(m.email||'')} · ${m.role==='owner'?'방장':'동행자'}</div></div><div class="actions">${uid===user.uid?'<span class="pill">나</span>':''}${owner&&uid!==user.uid?`<button class="btn small danger-btn" data-remove-member="${uid}">내보내기</button>`:''}</div></div>`).join('');
+  const leaveCard=!owner?`<div class="card leave-card"><b>여행에서 나가기</b><p class="note">탈퇴하면 이 여행의 일정과 지출을 더 이상 볼 수 없습니다. 다시 참여하려면 새 초대코드가 필요합니다.</p><button id="leaveTripBtn" class="btn danger-btn">여행 탈퇴</button></div>`:`<div class="card"><b>방장은 탈퇴할 수 없습니다</b><p class="note">여행을 떠나려면 먼저 다른 동행자에게 방장 권한을 이전해야 합니다.</p></div>`;
+  $('#panel-members').innerHTML=`<div class="section-title"><h2>동행자</h2></div>${inviteCard}<div class="section-title"><h2>${currentTrip.memberIds?.length||1}명 참여 중</h2></div><div class="list">${members}</div><div class="section-title"><h2>참여 관리</h2></div>${leaveCard}`;
   if(owner){
     const issue=$('#issueInviteBtn');if(issue)issue.onclick=issueInviteCode;
     const copy=$('#memberCopyInvite');if(copy)copy.onclick=async()=>{await navigator.clipboard.writeText(currentTrip.inviteCode);alert('초대코드를 복사했습니다.')};
+    $$('[data-remove-member]').forEach(b=>b.onclick=()=>removeMember(b.dataset.removeMember));
+  }else{
+    const leave=$('#leaveTripBtn');if(leave)leave.onclick=leaveTrip;
   }
 }
 
