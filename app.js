@@ -102,17 +102,17 @@ async function permanentlyDeleteTrip(tripId){
 }
 function renderTripGrid(trips,status=''){
   const isTrashed=t=>t.isDeleted===true||(!!t.deletedAt&&t.isDeleted!==false),active=trips.filter(t=>!isTrashed(t)),trashed=trips.filter(t=>isTrashed(t)&&t.ownerId===user.uid);
-  const activeHtml=active.length?active.map(t=>`<article class="card trip-card"><div><span class="pill">${esc(t.destination||'여행')}</span></div><h3>${esc(t.name)}</h3><div class="meta">${esc(t.startDate||'')} ~ ${esc(t.endDate||'')} · ${t.memberIds?.length||1}명</div><div class="actions"><button class="btn primary" data-open-trip="${t.id}">여행방 열기</button>${t.ownerId===user.uid?`<button class="btn danger-btn" data-delete-trip="${t.id}" data-trip-name="${esc(t.name)}">여행방 없애기</button>`:''}</div></article>`).join(''):'<div class="empty">아직 여행이 없어요. 새 여행을 만들어보세요.</div>';
+  const activeHtml=active.length?active.map(t=>`<article class="card trip-card"><div><span class="pill">${esc(t.destination||'여행')}</span></div><h3>${esc(t.name)}</h3><div class="meta">${esc(t.startDate||'')} ~ ${esc(t.endDate||'')} · ${t.members?Object.keys(t.members).length:(t.memberIds?.length||1)}명</div><div class="actions"><button class="btn primary" data-open-trip="${t.id}">여행방 열기</button>${t.ownerId===user.uid?`<button class="btn danger-btn" data-delete-trip="${t.id}" data-trip-name="${esc(t.name)}">여행방 없애기</button>`:''}</div></article>`).join(''):'<div class="empty">아직 여행이 없어요. 새 여행을 만들어보세요.</div>';
   const trashHtml=trashed.length?`<div class="trip-trash"><div class="section-title"><h2>최근 없앤 여행방</h2></div><div class="grid">${trashed.map(t=>`<article class="card trip-card trashed"><span class="pill">휴지통</span><h3>${esc(t.name)}</h3><div class="meta">${esc(t.startDate||'')} ~ ${esc(t.endDate||'')}</div><div class="actions"><button class="btn" data-restore-trip="${t.id}">여행방 복구</button><button class="btn danger-btn" data-purge-trip="${t.id}">완전 삭제</button></div></article>`).join('')}</div></div>`:'';
   $('#tripGrid').innerHTML=`${status?`<div class="data-status">${esc(status)}</div>`:''}${activeHtml}${trashHtml}`;
   $$('[data-open-trip]').forEach(b=>b.onclick=()=>openTrip(b.dataset.openTrip));
   $$('[data-delete-trip]').forEach(b=>b.onclick=()=>moveTripToTrash(b.dataset.deleteTrip));
-  $('[data-restore-trip]').forEach(b=>b.onclick=()=>restoreTrip(b.dataset.restoreTrip));
-  $('[data-purge-trip]').forEach(b=>b.onclick=()=>permanentlyDeleteTrip(b.dataset.purgeTrip));
+  $$('[data-restore-trip]').forEach(b=>b.onclick=()=>restoreTrip(b.dataset.restoreTrip));
+  $$('[data-purge-trip]').forEach(b=>b.onclick=()=>permanentlyDeleteTrip(b.dataset.purgeTrip));
 }
 async function repairOwnedTrip(trip){
   if(trip.ownerId!==user.uid||tripRepairing.has(trip.id))return;
-  const currentMemberIds=Array.isArray(trip.memberIds)?trip.memberIds:[],bannedIds=Array.isArray(trip.bannedMemberIds)?trip.bannedMemberIds:[],profileMemberIds=Object.keys(trip.members||{}).filter(uid=>!bannedIds.includes(uid));
+  const allCurrentMemberIds=Array.isArray(trip.memberIds)?trip.memberIds:[],bannedIds=Array.isArray(trip.bannedMemberIds)?trip.bannedMemberIds:[],virtualIds=Object.entries(trip.members||{}).filter(([,m])=>m.virtual).map(([uid])=>uid),currentMemberIds=allCurrentMemberIds.filter(uid=>!virtualIds.includes(uid)),profileMemberIds=Object.entries(trip.members||{}).filter(([uid,m])=>!m.virtual&&!bannedIds.includes(uid)).map(([uid])=>uid);
   const repairedMemberIds=[...new Set([user.uid,...currentMemberIds,...profileMemberIds])].filter(uid=>!bannedIds.includes(uid)||uid===user.uid);
   const missingMemberLinks=repairedMemberIds.some(uid=>!currentMemberIds.includes(uid))||currentMemberIds.some(uid=>!repairedMemberIds.includes(uid));
   const missingProfile=!trip.members?.[user.uid],missingCode=!trip.inviteCode;
@@ -213,7 +213,7 @@ function renderHeader(){const owner=currentTrip.ownerId===user.uid;$('#tripTitle
 $('#copyInviteBtn').onclick=async()=>{if(currentTrip?.inviteCode){await navigator.clipboard.writeText(currentTrip.inviteCode);alert('초대코드를 복사했습니다.')}};
 function renderTabs(){$('#tabs').innerHTML=tabs.map(([k,l],i)=>`<button class="tab ${i===0?'active':''}" data-tab="${k}">${l}</button>`).join('');$$('[data-tab]').forEach(b=>b.onclick=()=>{$$('.tab').forEach(x=>x.classList.toggle('active',x===b));$$('.panel').forEach(p=>p.classList.toggle('active',p.id===`panel-${b.dataset.tab}`));if(b.dataset.tab==='weather')loadWeather();if(b.dataset.tab==='places')renderPlaces()})}
 function renderAll(){if(!currentTrip)return;renderOverview();renderItinerary();renderFlights();renderStays();renderMoney();renderExchange();renderPacking();renderMemos();renderMembers();renderPlaces()}
-function memberOptions(sel=''){return Object.entries(currentTrip.members||{}).map(([uid,m])=>`<option value="${uid}" ${uid===sel?'selected':''}>${esc(m.nickname||m.email)}</option>`).join('')}
+function memberOptions(sel=''){return Object.entries(currentTrip.members||{}).map(([uid,m])=>`<option value="${uid}" ${uid===sel?'selected':''}>${esc(m.nickname||m.email)}${m.virtual?' (비로그인)':''}</option>`).join('')}
 
 function expenseBreakdown(){
   const rows=Object.entries(currentTrip.members||{}).map(([uid,m])=>({uid,name:m.nickname||m.email||'동행자',personal:0,shared:0,total:0}));
@@ -416,20 +416,31 @@ async function loadWeather(){
   box.innerHTML='<div class="section-title"><h2>여행 일정 날씨</h2></div><div class="card">여행지별 날씨를 불러오는 중…</div>';
   try{
     if(!currentTrip.startDate||!currentTrip.endDate)throw Error('여행 시작일과 종료일을 먼저 설정하세요.');
-    const locationNames=[currentTrip.destination,...tripCountries(currentTrip).map(x=>x.name)].map(x=>(x||'').trim()).filter((x,i,a)=>x&&a.indexOf(x)===i);
+    const defaultLocations=[currentTrip.destination,...tripCountries(currentTrip).map(x=>x.name)].map(x=>(x||'').trim()).filter(Boolean),customLocations=(currentTrip.weatherLocations||[]).map(x=>(x||'').trim()).filter(Boolean),locationNames=[...defaultLocations,...customLocations].filter((x,i,a)=>x&&a.indexOf(x)===i);
     if(!locationNames.length)throw Error('대표 여행지 또는 여행 국가를 먼저 설정하세요.');
     const rangeStart=addIsoDays(currentTrip.startDate,-3),rangeEnd=addIsoDays(currentTrip.endDate,3),targetDates=[];
     for(let date=rangeStart;date<=rangeEnd&&targetDates.length<45;date=addIsoDays(date,1))targetDates.push(date);
-    const results=await Promise.all(locationNames.map(async name=>{try{return await fetchWeatherLocation(name)}catch(e){return {query:name,label:name,error:e.message,byDate:new Map()}}}));
+    const results=await Promise.all(locationNames.map(async name=>{try{return {...await fetchWeatherLocation(name),custom:customLocations.includes(name)}}catch(e){return {query:name,label:name,error:e.message,byDate:new Map(),custom:customLocations.includes(name)}}}));
     const head=targetDates.map(date=>`<th class="${date>=currentTrip.startDate&&date<=currentTrip.endDate?'trip-date':''}">${date.slice(5)}<small>${date>=currentTrip.startDate&&date<=currentTrip.endDate?'여행':''}</small></th>`).join('');
-    const body=results.map(loc=>`<tr><th class="weather-location">${esc(loc.label)}${loc.error?`<small>${esc(loc.error)}</small>`:''}</th>${targetDates.map(date=>weatherCell(loc.byDate.get(date))).join('')}</tr>`).join('');
+    const body=results.map(loc=>`<tr><th class="weather-location"><span>${esc(loc.label)}</span>${loc.custom?`<button class="btn tiny danger-btn" data-weather-remove="${esc(loc.query)}">삭제</button>`:''}${loc.error?`<small>${esc(loc.error)}</small>`:''}</th>${targetDates.map(date=>weatherCell(loc.byDate.get(date))).join('')}</tr>`).join('');
     box.innerHTML=`<div class="section-title"><div><h2>여행 일정 날씨</h2><p class="note">대표 여행지와 선택한 국가를 기준으로 여행 전후 3일까지 비교합니다.</p></div><button id="weatherLookup" class="btn primary">원하는 곳 날씨 확인하기</button></div><div class="weather-table-wrap"><table class="weather-table"><thead><tr><th>국가·여행지</th>${head}</tr></thead><tbody>${body}</tbody></table></div><p class="note">예보 범위 밖의 날짜는 “아직 미공개”로 표시됩니다.</p>`;
-    $('#weatherLookup').onclick=weatherLookupForm;
+    $('#weatherLookup').onclick=weatherLookupForm;$('[data-weather-remove]').forEach(b=>b.onclick=()=>removeWeatherLocation(b.dataset.weatherRemove));
   }catch(e){box.innerHTML=`<div class="section-title"><h2>여행 일정 날씨</h2><button id="weatherLookup" class="btn primary">원하는 곳 날씨 확인하기</button></div><div class="card danger">${esc(e.message)}</div>`;$('#weatherLookup').onclick=weatherLookupForm}
+}
+async function registerWeatherLocation(locationName){
+  const name=(locationName||'').trim();if(!name)return;
+  const existing=currentTrip.weatherLocations||[];if(existing.includes(name))return alert('이미 날씨표에 등록된 장소입니다.');
+  await updateDoc(doc(db,'trips',currentTrip.id),{weatherLocations:arrayUnion(name),updatedAt:serverTimestamp(),updatedBy:user.uid});
+  currentTrip.weatherLocations=[...existing,name];closeModal();await loadWeather();
+}
+async function removeWeatherLocation(locationName){
+  if(!confirm(`${locationName} 날씨를 표에서 삭제할까요?`))return;
+  await updateDoc(doc(db,'trips',currentTrip.id),{weatherLocations:arrayRemove(locationName),updatedAt:serverTimestamp(),updatedBy:user.uid});
+  currentTrip.weatherLocations=(currentTrip.weatherLocations||[]).filter(x=>x!==locationName);await loadWeather();
 }
 function weatherLookupForm(){
   modal(`<h3>원하는 곳 날씨 확인하기</h3><div class="field"><label>국가·도시·여행지</label><div class="row"><input id="weatherQuery" placeholder="예: 타이베이, 오사카"><button id="weatherSearch" class="btn primary">확인하기</button></div></div><p id="weatherSearchMsg" class="note"></p><div id="weatherSearchResult"></div><div class="row"><button class="btn" data-close="1">닫기</button></div>`);
-  const search=async()=>{const queryText=$('#weatherQuery').value.trim(),message=$('#weatherSearchMsg'),result=$('#weatherSearchResult');if(!queryText)return message.textContent='확인할 장소를 입력해 주세요.';try{message.textContent='날씨를 불러오는 중…';const loc=await fetchWeatherLocation(queryText);const dates=loc.dates.slice(0,16);result.innerHTML=`<h4>${esc(loc.label)}</h4><div class="weather-lookup-grid">${dates.map(date=>{const item=loc.byDate.get(date);return `<div class="weather-mini"><b>${date.slice(5)}</b><span>${weatherIcon(item?.code)}</span><small>${item?`${Math.round(item.min)}° / ${Math.round(item.max)}° · 강수 ${item.rain??'-'}%`:'미공개'}</small></div>`}).join('')}</div>`;message.textContent='현재 공개된 예보입니다.'}catch(e){message.textContent=e.message||String(e)}};
+  const search=async()=>{const queryText=$('#weatherQuery').value.trim(),message=$('#weatherSearchMsg'),result=$('#weatherSearchResult');if(!queryText)return message.textContent='확인할 장소를 입력해 주세요.';try{message.textContent='날씨를 불러오는 중…';const loc=await fetchWeatherLocation(queryText),dates=loc.dates.slice(0,16);result.innerHTML=`<div class="section-title"><h4>${esc(loc.label)}</h4><button id="weatherRegister" class="btn primary">날씨표에 등록</button></div><div class="weather-lookup-grid">${dates.map(date=>{const item=loc.byDate.get(date);return `<div class="weather-mini"><b>${date.slice(5)}</b><span>${weatherIcon(item?.code)}</span><small>${item?`${Math.round(item.min)}° / ${Math.round(item.max)}° · 강수 ${item.rain??'-'}%`:'미공개'}</small></div>`}).join('')}</div>`;$('#weatherRegister').onclick=()=>registerWeatherLocation(queryText);message.textContent='현재 공개된 예보입니다. 등록하면 여행방 날씨표에 계속 표시됩니다.'}catch(e){message.textContent=e.message||String(e)}};
   $('#weatherSearch').onclick=search;$('#weatherQuery').onkeydown=e=>{if(e.key==='Enter'){e.preventDefault();search()}};
 }
 function renderFlights(){const a=cache.flights||[];$('#panel-flights').innerHTML=`<div class="section-title"><h2>항공편</h2><button id="addFlight" class="btn primary">+ 항공 추가</button></div><div class="list">${a.length?a.map(x=>`<div class="item"><div><h4>${esc(x.airline||'')} ${esc(x.flightNo||'')}</h4><div class="sub">${esc(x.date||'')} · ${esc(x.from||'')} ${esc(x.depart||'')} → ${esc(x.to||'')} ${esc(x.arrive||'')}</div><div class="sub">예약번호 ${esc(x.booking||'-')}</div>${x.note?`<div class="record-note">${esc(x.note)}</div>`:''}</div><div class="actions"><button class="btn small" data-edit="flights:${x.id}">수정</button><button class="btn small" data-del="flights:${x.id}">삭제</button></div></div>`).join(''):'<div class="empty">항공권 정보를 한곳에 모아두세요.</div>'}</div>`;$('#addFlight').onclick=flightForm;bindDeletes()}
@@ -550,21 +561,30 @@ async function leaveTrip(){
     await openTrip(tripId).catch(()=>showHome());
   }
 }
+function addVirtualTravelerForm(){
+  if(currentTrip.ownerId!==user.uid)return;
+  modal(`<h3>비로그인 여행자 추가</h3><div class="field"><label>여행자 닉네임</label><input id="virtualNickname" maxlength="30" placeholder="예: 엄마, 민수"></div><p class="note">인터넷이나 계정을 사용하기 어려운 여행자를 정산 인원으로 추가합니다. 이 여행자는 직접 로그인하거나 내용을 수정할 수 없습니다.</p><div class="row"><button class="btn" data-close="1">취소</button><button id="virtualSave" class="btn primary">인원 추가</button></div>`);
+  $('#virtualSave').onclick=async()=>{const nickname=$('#virtualNickname').value.trim(),button=$('#virtualSave');if(!nickname)return alert('닉네임을 입력해 주세요.');if(Object.values(currentTrip.members||{}).some(m=>(m.nickname||'').trim()===nickname))return alert('같은 닉네임의 여행자가 이미 있습니다.');button.disabled=true;const virtualUid=`guest_${Date.now().toString(36)}_${Math.random().toString(36).slice(2,7)}`;await updateDoc(doc(db,'trips',currentTrip.id),{[`members.${virtualUid}`]:{nickname,email:'',role:'guest',virtual:true,addedBy:user.uid},updatedAt:serverTimestamp(),updatedBy:user.uid});closeModal()};
+}
+async function removeVirtualTraveler(uid){
+  const member=currentTrip.members?.[uid];if(!member?.virtual||currentTrip.ownerId!==user.uid)return;
+  if(!confirm(`${member.nickname} 여행자를 정산 인원에서 삭제할까요? 기존 지출 기록의 이름 연결에 영향을 줄 수 있습니다.`))return;
+  await updateDoc(doc(db,'trips',currentTrip.id),{[`members.${uid}`]:deleteField(),updatedAt:serverTimestamp(),updatedBy:user.uid});
+}
 function renderMembers(){
-  const owner=currentTrip.ownerId===user.uid;
-  const inviteCard=owner?`<div class="card"><b>여행 고정 입장 코드</b><p class="big">${currentTrip.inviteCode?esc(currentTrip.inviteCode):'아직 발급하지 않음'}</p><p class="note">이 코드는 해당 여행방에서 계속 유지됩니다. 로그인한 동행자가 홈의 “초대코드 참가”에 입력하면 언제든 이 방에 들어올 수 있습니다.</p><div class="actions">${currentTrip.inviteCode?'<button id="memberCopyInvite" class="btn primary">고정 코드 복사</button>':'<button id="issueInviteBtn" class="btn primary">고정 코드 발급</button>'}</div></div>`:`<div class="card"><b>초대는 방장이 관리합니다</b><p class="note">현재 여행에 이미 참여 중입니다. 새로운 동행자에게 입장 코드를 전달해야 한다면 방장에게 요청하세요.</p></div>`;
-  const members=Object.entries(currentTrip.members||{}).map(([uid,m])=>`<div class="item"><div><h4>${esc(m.nickname||m.email)}</h4><div class="sub">${esc(m.email||'')} · ${m.role==='owner'?'방장':'동행자'}</div></div><div class="actions">${uid===user.uid?'<span class="pill">나</span>':''}${owner&&uid!==user.uid?`<button class="btn small danger-btn" data-remove-member="${uid}">내보내기</button>`:''}</div></div>`).join('');
-  const leaveCard=!owner?`<div class="card leave-card"><b>여행에서 나가기</b><p class="note">탈퇴하면 이 여행의 일정과 지출을 더 이상 볼 수 없습니다. 자발적으로 나간 뒤에는 기존 고정 코드로 다시 참여할 수 있습니다.</p><button id="leaveTripBtn" class="btn danger-btn">여행 탈퇴</button></div>`:`<div class="card"><b>방장은 탈퇴할 수 없습니다</b><p class="note">여행을 떠나려면 먼저 다른 동행자에게 방장 권한을 이전해야 합니다.</p></div>`;
-  $('#panel-members').innerHTML=`<div class="section-title"><h2>동행자</h2></div>${inviteCard}<div class="section-title"><h2>${currentTrip.memberIds?.length||1}명 참여 중</h2></div><div class="list">${members}</div><div class="section-title"><h2>참여 관리</h2></div>${leaveCard}`;
+  const owner=currentTrip.ownerId===user.uid,memberEntries=Object.entries(currentTrip.members||{}),totalCount=memberEntries.length;
+  const inviteCard=owner?`<div class="card"><b>여행 고정 입장 코드</b><p class="big">${currentTrip.inviteCode?esc(currentTrip.inviteCode):'아직 발급하지 않음'}</p><p class="note">로그인할 수 있는 동행자는 이 코드를 입력해 여행방에 참가할 수 있습니다.</p><div class="actions">${currentTrip.inviteCode?'<button id="memberCopyInvite" class="btn primary">고정 코드 복사</button>':'<button id="issueInviteBtn" class="btn primary">고정 코드 발급</button>'}</div></div>`:`<div class="card"><b>초대는 방장이 관리합니다</b><p class="note">새로운 동행자에게 입장 코드를 전달하려면 방장에게 요청하세요.</p></div>`;
+  const members=memberEntries.map(([uid,m])=>{const role=m.virtual?'비로그인 여행자':m.role==='owner'?'방장':'동행자';return `<div class="item"><div><h4>${esc(m.nickname||m.email)}</h4><div class="sub">${m.email?esc(m.email)+' · ':''}${role}</div></div><div class="actions">${uid===user.uid?'<span class="pill">나</span>':''}${m.virtual?'<span class="pill">정산 전용</span>':''}${owner&&uid!==user.uid?(m.virtual?`<button class="btn small danger-btn" data-remove-virtual="${uid}">삭제</button>`:`<button class="btn small danger-btn" data-remove-member="${uid}">내보내기</button>`):''}</div></div>`}).join('');
+  const leaveCard=!owner?`<div class="card leave-card"><b>여행에서 나가기</b><p class="note">탈퇴하면 이 여행의 일정과 지출을 더 이상 볼 수 없습니다.</p><button id="leaveTripBtn" class="btn danger-btn">여행 탈퇴</button></div>`:`<div class="card"><b>비로그인 여행자란?</b><p class="note">계정이나 인터넷을 사용하기 어려운 사람을 닉네임만으로 추가해 지출·정산·준비물 담당자로 선택할 수 있습니다. 앱에 직접 로그인할 수는 없습니다.</p></div>`;
+  $('#panel-members').innerHTML=`<div class="section-title"><h2>동행자</h2>${owner?'<button id="addVirtualTraveler" class="btn primary">+ 비로그인 여행자</button>':''}</div>${inviteCard}<div class="section-title"><h2>${totalCount||1}명 참여 중</h2></div><div class="list">${members}</div><div class="section-title"><h2>참여 관리</h2></div>${leaveCard}`;
   if(owner){
     const issue=$('#issueInviteBtn');if(issue)issue.onclick=issueInviteCode;
     const copy=$('#memberCopyInvite');if(copy)copy.onclick=async()=>{await navigator.clipboard.writeText(currentTrip.inviteCode);alert('초대코드를 복사했습니다.')};
+    $('#addVirtualTraveler').onclick=addVirtualTravelerForm;
     $$('[data-remove-member]').forEach(b=>b.onclick=()=>removeMember(b.dataset.removeMember));
-  }else{
-    const leave=$('#leaveTripBtn');if(leave)leave.onclick=leaveTrip;
-  }
+    $$('[data-remove-virtual]').forEach(b=>b.onclick=()=>removeVirtualTraveler(b.dataset.removeVirtual));
+  }else{const leave=$('#leaveTripBtn');if(leave)leave.onclick=leaveTrip}
 }
-
 function selected(value,current){return value===current?'selected':''}
 function tripEditForm(){
   const savedCountries=tripCountries(currentTrip),selectedCodes=savedCountries.length?savedCountries.map(x=>x.code):tripForeignCurrencies(currentTrip).map(currency=>countryCurrencyMap.find(x=>x[2]===currency)?.[0]).filter(Boolean);
