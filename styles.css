@@ -76,3 +76,12 @@
 .record-note{margin-top:8px;padding:9px 11px;border-radius:10px;background:#f7f7fa;white-space:pre-wrap;color:#4b525a}
 
 .weather-location{position:relative}.weather-location>span{display:block;padding-right:42px}.btn.tiny{padding:4px 7px;font-size:11px;position:absolute;top:6px;right:6px}
+
+.person-expense{border-bottom:1px solid var(--line,#e5e7eb)}
+.person-expense:last-child{border-bottom:0}
+.person-expense summary{display:flex;justify-content:space-between;gap:12px;align-items:center;padding:12px 0;cursor:pointer;list-style:none}
+.person-expense summary::-webkit-details-marker{display:none}
+.person-expense summary span{display:grid;gap:4px}
+.person-expense summary small{color:#687078}
+.person-expense-detail{display:grid;gap:8px;padding:0 0 14px}
+.person-expense-detail>div{display:flex;justify-content:space-between;gap:12px}
